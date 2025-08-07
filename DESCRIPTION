@@ -1,0 +1,18 @@
+Package: imputeflow
+Type: Package
+Title: Data-Imputation Helpers and CLI Tools
+Version: 0.1.0
+Authors@R: 
+    person(
+      given = "Eric",
+      family = "Miller",
+      email = "myeagereconomist@gmail.com",
+      role = c("aut", "cre")
+    )
+Description: Utilities for imputing missing data and visualizing differences
+    either via a Shiny application or from the command line.
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2

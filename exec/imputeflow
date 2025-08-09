@@ -1,0 +1,15 @@
+#!/usr/bin/env Rscript
+
+suppressPackageStartupMessages({
+  library(imputeflow)
+  library(readr)
+})
+
+# Read from stdin
+df_in <- read_csv(file("stdin"), show_col_types = FALSE)
+
+# Run mean imputation
+df_out <- impute_mean(df_in)
+
+# Write to stdout
+write_csv(df_out, stdout())

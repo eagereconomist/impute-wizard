@@ -13,3 +13,35 @@ impute_mean <- function(df) {
   })
   df
 }
+
+#' Impute median for numeric columns
+#' @param df data.frame
+#' @return data.frame
+#' @export 
+impute_median <- function(df) {
+  stopifnot(is.data.frame(df))
+  df[] <- lapply(df, function(col) {
+    if (is.numeric(col)) col[is.na(col)] <- stats::median(col, na.rm = TRUE)
+    col
+  })
+  df
+}
+
+#' Impute mode for columns (numeric or character)
+#' @param df data.frame
+#' @return data.frame
+#' @export
+impute_mode <- function(df) {
+  stopifnot(is.data.frame(df))
+  mode_of <- function(x) {
+    ux <- unique(x[!is.na(x)])
+    if (length(ux) == 0) return(x)
+    ux[which.max(tabulate(match(x, ux)))]
+  }
+  df[] <- lapply(df, function(col) {
+    m <- mode_of(col)
+    col[is.na(col)] <- m
+    col
+  })
+  df
+}

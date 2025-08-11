@@ -6,18 +6,20 @@ skip_if_no_pkg <- function(pkg) {
   }
 }
 
+
 skip_if_no_h2o_runtime <- function() {
   skip_if_no_pkg("h2o")
   ok <- TRUE
+  err <- NULL
   tryCatch({
-    # connect (or start) a small local cluster; no strict version
-    h2o::h2o.init(nthreads = 1, strict_version_check = FALSE, startH2O = TRUE, port = -1)
-  }, error = function(e) { ok <<- FALSE })
-  if (!ok) testthat::skip("H2O runtime not available (Java or start failure)")
-
-  # suppress the "cluster version is X months old" warning in tests
-  suppressWarnings(h2o::h2o.clusterInfo())
+    imputeflow:::ensure_h2o(nthreads = 1, port = "auto", quiet = TRUE)
+    suppressWarnings(h2o::h2o.clusterInfo())
+  }, error = function(e) { ok <<- FALSE; err <<- conditionMessage(e) })
+  if (!ok) testthat::skip(paste0("H2O runtime not available: ", err %||% "unknown error"))
 }
+`%||%` <- function(x, y) if (is.null(x)) y else x
+
+
 
 toy_frame <- function() {
   data.frame(
@@ -26,7 +28,7 @@ toy_frame <- function() {
     x_num2 = rnorm(60),
     x_cat  = factor(sample(c("a", "b", "c"), 60, TRUE)),
     y_num  = c(rnorm(55, 10, 2), rep(NA, 5)),
-    y_cat  = factor(c(sample(c("yes","no"), 56, TRUE), rep(NA, 4))),
+    y_cat  = factor(c(sample(c("yes", "no"), 56, TRUE), rep(NA, 4))),
     stringsAsFactors = TRUE
   )
 }

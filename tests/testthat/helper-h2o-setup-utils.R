@@ -9,16 +9,30 @@ skip_if_no_pkg <- function(pkg) {
 
 skip_if_no_h2o_runtime <- function() {
   skip_if_no_pkg("h2o")
+
   ok <- TRUE
   err <- NULL
   tryCatch({
-    imputeflow:::ensure_h2o(nthreads = 1, port = "auto", quiet = TRUE)
+    ns <- try(asNamespace("imputeflow"), silent = TRUE)
+
+    if (!inherits(ns, "try-error") && exists("ensure_h2o", envir = ns, inherits = FALSE)) {
+      getFromNamespace("ensure_h2o", "imputeflow")(nthreads = 1, port = "auto", quiet = TRUE)
+    } else {
+      # Fallback: start H2O directly (try a few ports)
+      for (p in c(54321L, 54322L, 54323L)) {
+        okp <- TRUE
+        tryCatch({
+          h2o::h2o.init(nthreads = 1, strict_version_check = FALSE, startH2O = TRUE, port = p)
+        }, error = function(e) okp <<- FALSE)
+        if (okp) break
+      }
+    }
+
     suppressWarnings(h2o::h2o.clusterInfo())
   }, error = function(e) { ok <<- FALSE; err <<- conditionMessage(e) })
-  if (!ok) testthat::skip(paste0("H2O runtime not available: ", err %||% "unknown error"))
-}
-`%||%` <- function(x, y) if (is.null(x)) y else x
 
+  if (!ok) testthat::skip(paste0("H2O runtime not available: ", if (is.null(err)) "unknown" else err))
+}
 
 
 toy_frame <- function() {

@@ -1,15 +1,127 @@
 #!/usr/bin/env Rscript
 
 suppressPackageStartupMessages({
+  library(optparse)
+  library(cli)
   library(imputeflow)
-  library(readr)
 })
 
-# Read from stdin
-df_in <- read_csv(file("stdin"), show_col_types = FALSE)
+print_usage <- function() {
+  cat("
+Usage:
+  imputeflow impute <method> [options]
 
-# Run mean imputation
-df_out <- impute_mean(df_in)
+Methods:
+  mean | median | mode | knn | drf
 
-# Write to stdout
-write_csv(df_out, stdout())
+Common Options:
+  -c, --cols a,b,c        Comma-separated columns to impute (default: method-specific)
+  -v, --verbose           Verbose output
+
+kNN Options:
+      --neighbors N       Number of neighbors (default: 5)
+      --id-cols a,b       Columns to exclude from distance calc (kept in output)
+
+DRF (H2O) Options:
+      --ntrees N          Number of trees (default: 200)
+      --max-depth N       Max tree depth (default: 20)
+      --seed N            RNG seed (default: 1)
+      --h2o-threads N     Threads for H2O init (optional; if omitted, reuse default)
+      --h2o-mem STR       H2O max heap, e.g. 32G (optional)
+      --h2o-shutdown      Shutdown H2O before exit
+
+Examples:
+  cat data.csv | imputeflow impute mean --verbose > out.csv
+  cat data.csv | imputeflow impute knn --neighbors 7 --id-cols id > out.csv
+  cat data.csv | imputeflow impute drf --ntrees 300 --max-depth 25 --seed 42 > out.csv
+")
+}
+
+argv  <- commandArgs(trailingOnly = TRUE)
+is_flag <- function(x) startsWith(x, "-")
+first_flag <- which(is_flag(argv))
+pos <- if (length(first_flag)) argv[seq_len(min(first_flag) - 1)] else argv
+flags <- if (length(first_flag)) argv[min(first_flag):length(argv)] else character(0)
+
+if (length(pos) == 0 || pos[1] %in% c("-h", "--help")) {
+  print_usage()
+  quit(status = if (length(pos) == 0) 2 else 0)
+}
+
+command <- pos[1]
+method  <- if (length(pos) >= 2) pos[2] else NULL
+
+option_list <- list(
+  make_option(c("-c","--cols"), type = "character", default = NULL,
+              help = "Comma-separated column names to impute"),
+  make_option(c("-v","--verbose"), action = "store_true", default = FALSE,
+              help = "Verbose output"),
+  # kNN
+  make_option(c("--neighbors"), type = "integer", default = 5L,
+              help = "kNN neighbors (default: 5)"),
+  make_option(c("--id-cols"), type = "character", default = NULL,
+              help = "Columns to exclude from distance calc (comma-separated)"),
+  # DRF
+  make_option(c("--ntrees"), type = "integer", default = 200L,
+              help = "DRF trees (default: 200)"),
+  make_option(c("--max-depth"), type = "integer", default = 20L,
+              help = "DRF max depth (default: 20)"),
+  make_option(c("--seed"), type = "integer", default = 1L,
+              help = "Seed (default: 1)"),
+  make_option(c("--h2o-threads"), type = "integer", default = NA_integer_,
+              help = "H2O threads (optional)"),
+  make_option(c("--h2o-mem"), type = "character", default = NULL,
+              help = "H2O max heap, e.g. 32G (optional)"),
+  make_option(c("--h2o-shutdown"), action = "store_true", default = FALSE,
+              help = "Shutdown H2O before exit")
+)
+opt <- parse_args(OptionParser(option_list = option_list), args = flags)
+
+if (command != "impute") {
+  cli_alert_danger("Unknown command: {command}")
+  print_usage()
+  quit(status = 2)
+}
+if (is.null(method)) {
+  cli_alert_danger("Missing method. Choose one of: mean | median | mode | knn | drf")
+  print_usage()
+  quit(status = 2)
+}
+
+cols <- opt$cols
+cols <- if (!is.null(cols) && nzchar(cols)) trimws(strsplit(cols, ",", fixed = TRUE)[[1]]) else NULL
+id_cols <- opt$`id-cols`
+id_cols <- if (!is.null(id_cols) && nzchar(id_cols)) trimws(strsplit(id_cols, ",", fixed = TRUE)[[1]]) else NULL
+verbose <- isTRUE(opt$verbose)
+
+if (verbose) {
+  cli_h1("imputeflow")
+  cli_alert_info("Command : impute")
+  cli_alert_info("Method  : {tolower(method)}")
+  cli_alert_info("Columns : {if (is.null(cols)) 'unspecified' else paste(cols, collapse = ', ')}")
+  cli_alert_info("I/O     : stdin -> stdout")
+}
+
+df_in <- imputeflow:::read_stdin_csv(verbose)
+
+cli_progress_bar("Imputing", total = 1)
+df_out <- imputeflow:::apply_imputation_cli(
+  df = df_in,
+  method = method,
+  cols = cols,
+  opts = list(
+    neighbors    = opt$neighbors,
+    id_cols      = id_cols,
+    ntrees       = opt$ntrees,
+    max_depth    = opt$`max-depth`,
+    seed         = opt$seed,
+    h2o_threads  = if (!is.na(opt$`h2o-threads`)) opt$`h2o-threads` else NULL,
+    h2o_mem      = opt$`h2o-mem`,
+    h2o_shutdown = opt$`h2o-shutdown`
+  ),
+  verbose = verbose
+)
+cli_progress_update(set = 1)
+
+imputeflow:::write_stdout_csv(df_out, verbose)
+if (verbose) cli_alert_success("Done")

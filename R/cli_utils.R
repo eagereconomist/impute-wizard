@@ -23,24 +23,61 @@ write_stdout_csv <- function(df, verbose = FALSE) {
 # start or reuse H2O with user-specified resources
 #' @keywords internal
 #' @noRd
-ensure_h2o <- function(nthreads = -1, max_mem_size = NULL, quiet = TRUE) {
+ensure_h2o <- function(nthreads = -1, max_mem_size = NULL, port = "auto", quiet = TRUE) {
   if (!requireNamespace("h2o", quietly = TRUE)) {
     stop("Package 'h2o' is required for DRF imputation. Install it first.", call. = FALSE)
   }
-  existing <- try(h2o::h2o.getConnection(), silent = TRUE)
-  if (!inherits(existing, "H2OConnection")) {
-    if (!quiet) cli::cli_alert_info("Starting H2O (nthreads={nthreads}, max_mem_size={max_mem_size %||% 'auto'}) …")
-    h2o::h2o.init(
-      nthreads = nthreads,
-      strict_version_check = FALSE,
-      max_mem_size = max_mem_size %||% NULL
-    )
-  } else if (!quiet) {
-    cli::cli_alert_info("Reusing existing H2O connection.")
-  }
-  invisible(TRUE)
-}
 
+  # Reuse an existing connection if present
+  existing <- try(h2o::h2o.getConnection(), silent = TRUE)
+  if (inherits(existing, "H2OConnection")) {
+    if (!quiet) {
+      ip <- tryCatch(existing@ip, error = function(...) "localhost")
+      pr <- tryCatch(existing@port, error = function(...) NA_integer_)
+      cli::cli_alert_info(sprintf("Reusing existing H2O connection at %s:%s.", ip, pr))
+    }
+    return(invisible(TRUE))
+  }
+
+  # Choose candidate ports
+  ports <-
+    if (identical(port, "auto")) {
+      unique(c(54321L, 54322L, 54323L, sample(55000:59999, 6)))
+    } else if (is.null(port) || identical(port, "default")) {
+      54321L
+    } else {
+      as.integer(port)
+    }
+
+  last_err <- NULL
+  for (p in ports) {
+    ok <- TRUE
+    tryCatch({
+      h2o::h2o.init(
+        nthreads = nthreads,
+        strict_version_check = FALSE,
+        startH2O = TRUE,
+        port = p,
+        max_mem_size = max_mem_size
+      )
+    }, error = function(e) {
+      ok <<- FALSE
+      last_err <<- conditionMessage(e)
+    })
+    if (ok) {
+      if (!quiet) {
+        info <- h2o::h2o.clusterInfo()
+        cli::cli_alert_success(sprintf("H2O started (v%s) on port %s.", info$version, info$cloud_port))
+      }
+      return(invisible(TRUE))
+    }
+  }
+
+  stop(sprintf("Failed to start H2O on ports %s. Last error: %s",
+               paste(ports, collapse = ", "),
+               if (is.null(last_err)) "unknown" else last_err),
+       call. = FALSE)
+}
 # small infix default
 `%||%` <- function(x, y) if (is.null(x) || (is.character(x) && !nzchar(x))) y else x
 

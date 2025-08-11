@@ -15,25 +15,21 @@ Methods:
   mean | median | mode | knn | drf
 
 Common Options:
-  -c, --cols a,b,c        Comma-separated columns to impute (default: method-specific)
-  -v, --verbose           Verbose output
+  -c, --cols a,b,c        Comma-separated columns to impute
+  -q, --quiet             Suppress progress output (default: show)
+  -v, --verbose           (Deprecated) Verbosity is on by default; use --quiet to turn off
 
 kNN Options:
       --neighbors N       Number of neighbors (default: 5)
-      --id-cols a,b       Columns to exclude from distance calc (kept in output)
+      --id-cols a,b       Columns to exclude from distance calc
 
 DRF (H2O) Options:
       --ntrees N          Number of trees (default: 200)
       --max-depth N       Max tree depth (default: 20)
       --seed N            RNG seed (default: 1)
-      --h2o-threads N     Threads for H2O init (optional; if omitted, reuse default)
+      --h2o-threads N     Threads for H2O (optional)
       --h2o-mem STR       H2O max heap, e.g. 32G (optional)
       --h2o-shutdown      Shutdown H2O before exit
-
-Examples:
-  cat data.csv | imputeflow impute mean --verbose > out.csv
-  cat data.csv | imputeflow impute knn --neighbors 7 --id-cols id > out.csv
-  cat data.csv | imputeflow impute drf --ntrees 300 --max-depth 25 --seed 42 > out.csv
 ")
 }
 
@@ -44,8 +40,7 @@ pos <- if (length(first_flag)) argv[seq_len(min(first_flag) - 1)] else argv
 flags <- if (length(first_flag)) argv[min(first_flag):length(argv)] else character(0)
 
 if (length(pos) == 0 || pos[1] %in% c("-h", "--help")) {
-  print_usage()
-  quit(status = if (length(pos) == 0) 2 else 0)
+  print_usage(); quit(status = if (length(pos) == 0) 2 else 0)
 }
 
 command <- pos[1]
@@ -54,8 +49,11 @@ method  <- if (length(pos) >= 2) pos[2] else NULL
 option_list <- list(
   make_option(c("-c","--cols"), type = "character", default = NULL,
               help = "Comma-separated column names to impute"),
-  make_option(c("-v","--verbose"), action = "store_true", default = FALSE,
-              help = "Verbose output"),
+  make_option(c("-q","--quiet"), action = "store_true", default = FALSE,
+              help = "Suppress progress output"),
+  make_option(c("-v","--verbose"), action = "store_true", default = TRUE,
+              help = "Deprecated: verbosity is on by default; use --quiet to turn off"),
+
   # kNN
   make_option(c("--neighbors"), type = "integer", default = 5L,
               help = "kNN neighbors (default: 5)"),
@@ -77,22 +75,21 @@ option_list <- list(
 )
 opt <- parse_args(OptionParser(option_list = option_list), args = flags)
 
-if (command != "impute") {
-  cli_alert_danger("Unknown command: {command}")
-  print_usage()
-  quit(status = 2)
-}
-if (is.null(method)) {
-  cli_alert_danger("Missing method. Choose one of: mean | median | mode | knn | drf")
-  print_usage()
-  quit(status = 2)
+if (command != "impute" || is.null(method)) {
+  cli_alert_danger(if (is.null(method)) "Missing method." else paste("Unknown command:", command))
+  print_usage(); quit(status = 2)
 }
 
 cols <- opt$cols
 cols <- if (!is.null(cols) && nzchar(cols)) trimws(strsplit(cols, ",", fixed = TRUE)[[1]]) else NULL
 id_cols <- opt$`id-cols`
 id_cols <- if (!is.null(id_cols) && nzchar(id_cols)) trimws(strsplit(id_cols, ",", fixed = TRUE)[[1]]) else NULL
-verbose <- isTRUE(opt$verbose)
+
+# Verbose is ON by default; --quiet overrides
+verbose <- !isTRUE(opt$quiet)
+
+# One spinner instance for the whole run
+spinner <- cli::get_spinner("dots")
 
 if (verbose) {
   cli_h1("imputeflow")
@@ -102,10 +99,9 @@ if (verbose) {
   cli_alert_info("I/O     : stdin -> stdout")
 }
 
-df_in <- imputeflow:::read_stdin_csv(verbose)
+df_in <- imputeflow:::read_stdin_csv(verbose = verbose)
 
-cli_progress_bar("Imputing", total = 1)
-df_out <- imputeflow:::apply_imputation_cli(
+df_out <- imputeflow:::apply_imputation(
   df = df_in,
   method = method,
   cols = cols,
@@ -119,9 +115,8 @@ df_out <- imputeflow:::apply_imputation_cli(
     h2o_mem      = opt$`h2o-mem`,
     h2o_shutdown = opt$`h2o-shutdown`
   ),
-  verbose = verbose
+  verbose = verbose,
 )
-cli_progress_update(set = 1)
 
-imputeflow:::write_stdout_csv(df_out, verbose)
+imputeflow:::write_stdout_csv(df_out, verbose = verbose)
 if (verbose) cli_alert_success("Done")

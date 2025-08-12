@@ -1,6 +1,5 @@
 # R/impute_utils.R
 
-
 #' Impute mean for each numeric column in a data.frame
 #'
 #' @param df A data.frame with possible missing values
@@ -15,11 +14,10 @@ impute_mean <- function(df) {
   df
 }
 
-
 #' Impute median for numeric columns
 #' @param df data.frame
 #' @return data.frame
-#' @export 
+#' @export
 impute_median <- function(df) {
   stopifnot(is.data.frame(df))
   df[] <- lapply(df, function(col) {
@@ -29,7 +27,6 @@ impute_median <- function(df) {
   df
 }
 
-
 #' Impute mode for columns (numeric or character)
 #' @param df data.frame
 #' @return data.frame
@@ -38,7 +35,7 @@ impute_mode <- function(df) {
   stopifnot(is.data.frame(df))
   mode_of <- function(x) {
     ux <- unique(x[!is.na(x)])
-    if (length(ux) == 0) return(x)
+    if (length(ux) == 0) return(x)  # all NA: leave as-is downstream
     ux[which.max(tabulate(match(x, ux)))]
   }
   df[] <- lapply(df, function(col) {
@@ -48,7 +45,6 @@ impute_mode <- function(df) {
   })
   df
 }
-
 
 #' kNN Imputation (tidymodels/recipes)
 #'
@@ -82,26 +78,35 @@ impute_knn_recipes <- function(df,
 
   rec <- recipes::recipe(~ ., data = df)
 
-  # Handle id columns (bare selectors or character)
+  # Handle id columns (bare selectors or character) — guard empty selections
   id_q <- rlang::enquo(id_cols)
   if (!rlang::quo_is_null(id_q)) {
-    rec <- rec |> recipes::update_role(!!id_q, new_role = "id")
+    sel <- try(tidyselect::eval_select(rlang::get_expr(id_q), data = df), silent = TRUE)
+    if (!inherits(sel, "try-error") && length(sel) > 0) {
+      rec <- rec |> recipes::update_role(tidyselect::all_of(names(sel)), new_role = "id")
+    }
   } else if (is.character(id_cols)) {
-    rec <- rec |> recipes::update_role(tidyselect::all_of(id_cols), new_role = "id")
+    ids <- intersect(id_cols, names(df))
+    if (length(ids) > 0) {
+      rec <- rec |> recipes::update_role(tidyselect::all_of(ids), new_role = "id")
+    }
   }
 
   cols_q <- rlang::enquo(cols)
   if (rlang::quo_is_null(cols_q)) {
-    # Put all_of() directly in the selecting arg (no temp variable)
     rec <- rec |>
-      recipes::step_impute_knn(tidyselect::all_of(na_cols),
-                               neighbors = neighbors,
-                               impute_with = recipes::all_predictors())
+      recipes::step_impute_knn(
+        tidyselect::all_of(na_cols),
+        neighbors   = neighbors,
+        impute_with = recipes::all_predictors()
+      )
   } else {
     rec <- rec |>
-      recipes::step_impute_knn(!!cols_q,
-                               neighbors = neighbors,
-                               impute_with = recipes::all_predictors())
+      recipes::step_impute_knn(
+        !!cols_q,
+        neighbors   = neighbors,
+        impute_with = recipes::all_predictors()
+      )
   }
 
   # Bake on the original data to avoid retain=TRUE requirement
@@ -110,7 +115,6 @@ impute_knn_recipes <- function(df,
 
   as.data.frame(baked, stringsAsFactors = FALSE)
 }
-
 
 #' DRF (H2O) Model-based Imputation
 #'
@@ -195,7 +199,7 @@ impute_h2o_drf <- function(df,
 
     # Predict over ALL rows, then coalesce where original is NA.
     preds <- h2o::h2o.predict(model, hf[, x])
-    new_vals <- preds[,"predict"]               # works for regression & classification
+    new_vals <- preds[, "predict"]  # regression & classification
 
     # IMPORTANT: use is.na() (H2O S3), not h2o.isna (not exported in 3.44)
     hf[[y]] <- h2o::h2o.ifelse(is.na(hf[[y]]), new_vals, hf[[y]])
@@ -203,7 +207,7 @@ impute_h2o_drf <- function(df,
 
   out <- as.data.frame(hf, stringsAsFactors = FALSE)
 
-  # restore classes (unchanged from your last version)
+  # Restore classes
   for (nm in names(out)) {
     cls <- classes[[nm]]
     if (cls %in% c("integer", "numeric")) {

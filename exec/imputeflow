@@ -70,6 +70,8 @@ option_list <- list(
               help = "H2O threads (optional)"),
   make_option(c("--h2o-mem"), type = "character", default = NULL,
               help = "H2O max heap, e.g. 32G (optional)"),
+  make_option(c("--fallback"), type = "character", default = "none",
+              help = "Fallback if DRF doesn't reduce NAs: none|mean|median|mode"),
   make_option(c("--h2o-shutdown"), action = "store_true", default = FALSE,
               help = "Shutdown H2O before exit")
 )
@@ -113,6 +115,7 @@ df_out <- imputeflow:::apply_imputation(
     seed         = opt$seed,
     h2o_threads  = if (!is.na(opt$`h2o-threads`)) opt$`h2o-threads` else NULL,
     h2o_mem      = opt$`h2o-mem`,
+    fallback     = opt$fallback,
     h2o_shutdown = opt$`h2o-shutdown`
   ),
   verbose = verbose,

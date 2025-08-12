@@ -16,3 +16,17 @@ Encoding: UTF-8
 LazyData: true
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.2
+Imports:
+       recipes,
+       h2o,
+       cli,
+       optparse,
+       readr,
+       rlang,
+       tidyselect
+Suggests:
+       dpylr,
+       tibble,
+       testthat (>= 3.0.0),
+       withr
+Config/testthat/edition: 3

@@ -2,16 +2,20 @@
 % Please edit documentation in R/impute_utils.R
 \name{impute_median}
 \alias{impute_median}
-\title{Impute median for numeric columns}
+\title{Impute median for numeric columns.}
 \usage{
-impute_median(df)
+impute_median(df, train_frac = 1, seed = 1)
 }
 \arguments{
-\item{df}{data.frame}
+\item{df}{A data frame.}
+
+\item{train_frac}{Fraction of rows to use when computing the mean.}
+
+\item{seed}{RNG seed for reproducible sampling.}
 }
 \value{
-data.frame
+A data frame with missing numeric values replaced by the median.
 }
 \description{
-Impute median for numeric columns
+Analogous to `impute_mean`, but uses the median instead of the mean.
 }

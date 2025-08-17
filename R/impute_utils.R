@@ -139,75 +139,67 @@ impute_mode <- function(df, train_frac = 1, seed = 1) {
   out
 }
 
-#' @param df        A data frame.
-#' @param cols      A tidyselect specification or character vector of
-#' @param neighbors Number of neighbours to use for kNN (default 5).
-#' @param train_frac Fraction of rows to use for training (default 1).
-#' @param seed       RNG seed for sampling the training subset.
-#' @return A data frame with kNN-based imputations applied.
+#' Impute missing values using kNN (recipes)
+#'
+#' @param df A data.frame or tibble
+#' @param cols Optional character vector of columns to impute. If NULL, auto-detect.
+#' @param neighbors Number of neighbors for imputation.
+#' @param train_frac Proportion of rows to use for training (0–1).
+#' @param seed Random seed.
+#' @return Tibble with imputed values.
 #' @export
-impute_knn_recipes <- function(df,
-                               cols = NULL,
-                               neighbors = 5,
-                               train_frac = 1,
-                               seed = 1) {
-  if (!is.data.frame(df)) stop("`df` must be a data.frame", call. = FALSE)
-  if (!requireNamespace("recipes", quietly = TRUE)) stop("Package 'recipes' is required. Install it first.", call. = FALSE)
-  if (!requireNamespace("rlang", quietly = TRUE)) stop("Package 'rlang' is required. Install it first.", call. = FALSE)
-  if (!requireNamespace("tidyselect", quietly = TRUE)) stop("Package 'tidyselect' is required. Install it first.", call. = FALSE)
-  if (!is.numeric(train_frac) || train_frac <= 0 || train_frac > 1)
-    stop("`train_frac` must be a number in (0,1].", call. = FALSE)
-  n <- nrow(df)
-  train_idx <- if (train_frac < 1) {
-    set.seed(seed); sample(seq_len(n), floor(train_frac * n))
-  } else seq_len(n)
-  orig_classes <- vapply(df, function(x) class(x)[1], character(1))
-  df2 <- df
-  for (nm in names(df2)) {
-    miss <- missing_mask(df2[[nm]])
-    if (any(miss, na.rm = TRUE)) df2[[nm]][miss] <- NA
-    if (is.character(df2[[nm]])) df2[[nm]] <- as.factor(df2[[nm]])
-  }
-  cols_q <- rlang::enquo(cols)
-  if (rlang::quo_is_null(cols_q)) {
-    candidate_names <- names(df2)
+impute_knn_recipes <- function(df, cols = NULL, neighbors = 5, train_frac = 1.0, seed = 1) {
+  stopifnot(is.data.frame(df))
+  df <- tibble::as_tibble(df)
+  set.seed(seed)
+
+  # Only numeric columns are valid for kNN imputation
+  numeric_cols <- names(df)[vapply(df, is.numeric, logical(1))]
+
+  # Auto-select columns with NAs
+  if (is.null(cols)) {
+    cols <- numeric_cols[vapply(df[numeric_cols], function(x) any(is.na(x)), logical(1))]
   } else {
-    candidate_names <- character(0)
-    sel <- try(tidyselect::eval_select(rlang::get_expr(cols_q), data = df2), silent = TRUE)
-    if (!inherits(sel, "try-error") && length(sel) > 0) candidate_names <- names(sel)
-    if (is.character(cols)) candidate_names <- unique(c(candidate_names, intersect(cols, names(df2))))
-    candidate_names <- intersect(names(df2), candidate_names)
-    if (!length(candidate_names)) return(df2)
+    cols <- intersect(cols, numeric_cols)
   }
-  na_cols <- candidate_names[vapply(df2[candidate_names], needs_imputation, logical(1))]
-  if (!length(na_cols)) return(as.data.frame(df2, stringsAsFactors = FALSE))
-  rec <- recipes::recipe(~ ., data = df2[train_idx, , drop = FALSE])
-  rec <- rec |> recipes::step_impute_knn(
-    tidyselect::all_of(na_cols),
-    neighbors   = neighbors,
-    impute_with = recipes::all_predictors()
-  )
-  prepped <- recipes::prep(rec, training = df2[train_idx, , drop = FALSE], retain = FALSE)
-  baked_train <- recipes::bake(prepped, new_data = df2[train_idx, , drop = FALSE])
-  baked_test  <- recipes::bake(prepped, new_data = df2[-train_idx, , drop = FALSE])
-  out <- df2
-  out[train_idx, names(df2)] <- baked_train
-  out[-train_idx, names(df2)] <- baked_test
-  out_df <- as.data.frame(out, stringsAsFactors = FALSE)
-  for (nm in names(out_df)) {
-    cls <- orig_classes[[nm]]
-    if (cls %in% c("character")) {
-      out_df[[nm]] <- as.character(out_df[[nm]])
-    } else if (cls %in% c("integer")) {
-      new_vals <- suppressWarnings(as.numeric(out_df[[nm]]))
-      if (all(is.na(new_vals) | abs(new_vals - round(new_vals)) < .Machine$double.eps^0.5)) {
-        out_df[[nm]] <- as.integer(round(new_vals))
-      } else {
-        out_df[[nm]] <- new_vals
-      }
+
+  if (length(cols) == 0) {
+    cli::cli_alert_info("No eligible numeric columns with NAs for kNN imputation.")
+    return(df)
+  }
+
+  cli::cli_alert_info("Running kNN imputation on {length(cols)} column(s): {paste(cols, collapse = ', ')}")
+
+  train_rows <- sample(seq_len(nrow(df)), size = floor(train_frac * nrow(df)))
+  df_train <- df[train_rows, ]
+
+  # Remove problematic columns entirely from the recipe input
+  df_recipe <- dplyr::select(df, all_of(cols))
+  df_train_recipe <- df_recipe[train_rows, ]
+
+  rec <- recipes::recipe(~ ., data = df_train_recipe) |>
+    recipes::step_impute_knn(all_of(cols), neighbors = neighbors)
+
+  rec_prep <- tryCatch(
+    recipes::prep(rec, training = df_train_recipe, verbose = FALSE),
+    error = function(e) {
+      cli::cli_alert_danger("Recipe prep failed: {e$message}")
+      stop(e)
     }
-  }
-  out_df
+  )
+
+  imputed_subset <- tryCatch(
+    recipes::bake(rec_prep, new_data = df_recipe),
+    error = function(e) {
+      cli::cli_alert_danger("Recipe bake failed: {e$message}")
+      stop(e)
+    }
+  )
+
+  # Now replace the imputed columns back into the original full df
+  df[cols] <- imputed_subset[cols]
+
+  df
 }
 
 #' @param df Data frame containing the data to impute

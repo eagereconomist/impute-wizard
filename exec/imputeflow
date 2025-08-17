@@ -6,101 +6,165 @@ suppressPackageStartupMessages({
   library(imputeflow)
 })
 
-argv  <- commandArgs(trailingOnly = TRUE)
-is_flag <- function(x) startsWith(x, "-")
-first_flag <- which(is_flag(argv))
-pos <- if (length(first_flag)) argv[seq_len(min(first_flag) - 1)] else argv
-flags <- if (length(first_flag)) argv[min(first_flag):length(argv)] else character(0)
+argv <- commandArgs(trailingOnly = TRUE)
 
-if (length(pos) == 0 || pos[1] %in% c("-h", "--help")) {
-  print_usage(); quit(status = if (length(pos) == 0) 2 else 0)
+if (length(argv) == 0 || argv[1] %in% c("-h", "--help")) {
+  cat("
+Usage: imputeflow <method> [options]
+
+Methods:
+  mean       Impute using column-wise mean
+  median     Impute using column-wise median
+  mode       Impute using column-wise mode
+  knn        Impute using k-Nearest Neighbors
+  drf        Impute using Distributed Random Forest (H2O)
+
+Use --help with a method to see its options, e.g.:
+  imputeflow mean --help
+")
+  quit(status = if (length(argv) == 0) 2 else 0)
 }
 
-command <- pos[1]
-method  <- if (length(pos) >= 2) pos[2] else NULL
+method <- tolower(argv[1])
+args   <- argv[-1]
 
-option_list <- list(
-  optparse::make_option(c("-c", "--cols"), type = "character", default = NULL,
-              help = "Comma-separated column names to impute"),
-  optparse::make_option(c("-q", "--quiet"), action = "store_true", default = FALSE,
-              help = "Suppress progress output"),
-  optparse::make_option(c("-v", "--verbose"), action = "store_true", default = TRUE,
-              help = "Deprecated: verbosity is on by default; use --quiet to turn off"),
-  optparse::make_option(c("--train-frac"), type = "double", default = 1.0,
-              help = "Fraction of rows to use for training (default: 1.0)"),
-  optparse::make_option(c("--neighbors"), type = "integer", default = 5L,
-              help = "kNN neighbors (default: 5)"),
-  optparse::make_option(c("--ntrees"), type = "integer", default = 50L,
-              help = "DRF trees (default: 50)"),
-  optparse::make_option(c("--max-depth"), type = "integer", default = 10L,
-              help = "DRF max depth (default: 10)"),
-  optparse::make_option(c("--seed"), type = "integer", default = 1L,
-              help = "Seed (default: 1)"),
-  optparse::make_option(c("--min-rows"), type = "integer", default = NA_integer_,
-              help = "Minimum (weighted) observations in a leaf for DRF"),
-  optparse::make_option(c("--sample-rate"), type = "double", default = NA_real_,
-              help = "Row sampling rate per tree for DRF"),
-  optparse::make_option(c("--col-sample-rate-per-tree"), type = "double", default = NA_real_,
-              help = "Column sampling rate per tree for DRF"),
-  optparse::make_option(c("--balance-classes"), action = "store_true", default = FALSE,
-              help = "Enable class balancing for DRF"),
-  optparse::make_option(c("--round"), type = "integer", default = NA_integer_,
-              help = "Round numeric columns to this many decimal places"),
-  optparse::make_option(c("--h2o-threads"), type = "integer", default = NA_integer_,
-              help = "H2O threads (optional)"),
-  optparse::make_option(c("--h2o-mem"), type = "character", default = NULL,
-              help = "H2O max heap, e.g. 32G (optional)"),
-  optparse::make_option(c("--fallback"), type = "character", default = "none",
-              help = "Fallback if DRF doesn't reduce NAs: none|mean|median|mode"),
-  optparse::make_option(c("--h2o-shutdown"), action = "store_true", default = FALSE,
-              help = "Shutdown H2O before exit")
-)
-
-opt <- optparse::parse_args(optparse::OptionParser(option_list = option_list), args = flags)
-
-if (command != "impute" || is.null(method)) {
-  cli_alert_danger(if (is.null(method)) "Missing method." else paste("Unknown command:", command))
-  print_usage(); quit(status = 2)
+run_mean <- function() {
+  option_list <- list(
+    make_option(c("-c", "--cols"), type = "character", default = NULL),
+    make_option(c("--train-frac"), type = "double", default = 1.0),
+    make_option(c("--seed"), type = "integer", default = 1),
+    make_option(c("--round"), type = "integer", default = NA),
+    make_option(c("--quiet"), action = "store_true", default = FALSE)
+  )
+  opt <- parse_args(OptionParser(option_list = option_list), args = args)
+  cols <- if (!is.null(opt$cols)) strsplit(opt$cols, ",")[[1]] else NULL
+  df <- imputeflow:::read_stdin_csv(verbose = !opt$quiet)
+  out <- imputeflow::impute_mean(df, train_frac = opt$`train-frac`, seed = opt$seed)
+  if (!is.na(opt$round)) {
+    out <- imputeflow:::round_imputed_numerics(df, out, digits = opt$round)
+  }
+  imputeflow:::write_stdout_csv(out, verbose = !opt$quiet)
 }
 
-cols <- opt$cols
-cols <- if (!is.null(cols) && nzchar(cols)) trimws(strsplit(cols, ",", fixed = TRUE)[[1]]) else NULL
-verbose <- !isTRUE(opt$quiet)
-spinner <- cli::get_spinner("dots")
-
-if (verbose) {
-  cli_h1("imputeflow")
-  cli_alert_info("Command : impute")
-  cli_alert_info("Method  : {tolower(method)}")
-  cli_alert_info("Columns : {if (is.null(cols)) 'unspecified' else paste(cols, collapse = ', ')}")
-  cli_alert_info("I/O     : stdin -> stdout")
+run_median <- function() {
+  option_list <- list(
+    make_option(c("-c", "--cols"), type = "character", default = NULL),
+    make_option(c("--train-frac"), type = "double", default = 1.0),
+    make_option(c("--seed"), type = "integer", default = 1),
+    make_option(c("--round"), type = "integer", default = NA),
+    make_option(c("--quiet"), action = "store_true", default = FALSE)
+  )
+  opt <- parse_args(OptionParser(option_list = option_list), args = args)
+  cols <- if (!is.null(opt$cols)) strsplit(opt$cols, ",")[[1]] else NULL
+  df <- imputeflow:::read_stdin_csv(verbose = !opt$quiet)
+  out <- imputeflow::impute_median(df, train_frac = opt$`train-frac`, seed = opt$seed)
+  if (!is.na(opt$round)) {
+    out <- imputeflow:::round_imputed_numerics(df, out, digits = opt$round)
+  }
+  imputeflow:::write_stdout_csv(out, verbose = !opt$quiet)
 }
 
-df_in <- imputeflow:::read_stdin_csv(verbose = verbose)
-df_out <- imputeflow:::apply_imputation(
-  df = df_in,
-  method = method,
-  cols = cols,
-  opts = list(
-    neighbors    = opt$neighbors,
+run_mode <- function() {
+  option_list <- list(
+    make_option(c("-c", "--cols"), type = "character", default = NULL),
+    make_option(c("--train-frac"), type = "double", default = 1.0),
+    make_option(c("--seed"), type = "integer", default = 1),
+    make_option(c("--round"), type = "integer", default = NA),
+    make_option(c("--quiet"), action = "store_true", default = FALSE)
+  )
+  opt <- parse_args(OptionParser(option_list = option_list), args = args)
+  cols <- if (!is.null(opt$cols)) strsplit(opt$cols, ",")[[1]] else NULL
+  df <- imputeflow:::read_stdin_csv(verbose = !opt$quiet)
+  out <- imputeflow::impute_mode(df, train_frac = opt$`train-frac`, seed = opt$seed)
+  if (!is.na(opt$round)) {
+    out <- imputeflow:::round_imputed_numerics(df, out, digits = opt$round)
+  }
+  imputeflow:::write_stdout_csv(out, verbose = !opt$quiet)
+}
+
+run_knn <- function() {
+  option_list <- list(
+    make_option(c("-c", "--cols"), type = "character", default = NULL),
+    make_option(c("--neighbors"), type = "integer", default = 5),
+    make_option(c("--train-frac"), type = "double", default = 1.0),
+    make_option(c("--seed"), type = "integer", default = 1),
+    make_option(c("--round"), type = "integer", default = NA),
+    make_option(c("--quiet"), action = "store_true", default = FALSE)
+  )
+  opt <- parse_args(OptionParser(option_list = option_list), args = args)
+
+  cols <- if (!is.null(opt$cols)) strsplit(opt$cols, ",")[[1]] else NULL
+
+  #  Load input from stdin
+  df <- imputeflow:::read_stdin_csv(verbose = !opt$quiet)
+
+  #  Impute
+  out <- imputeflow::impute_knn_recipes(
+    df,
+    cols = cols,
+    neighbors = opt$neighbors,
+    train_frac = opt$`train-frac`,
+    seed = opt$seed
+  )
+
+  #  Apply rounding if requested
+  if (!is.na(opt$round)) {
+    out <- imputeflow:::round_imputed_numerics(df, out, digits = opt$round)
+  }
+
+  # Write to stdout — this is what was missing
+  imputeflow:::write_stdout_csv(out, verbose = !opt$quiet)
+}
+
+run_drf <- function() {
+  option_list <- list(
+    make_option(c("-c", "--cols"), type = "character", default = NULL),
+    make_option(c("--ntrees"), type = "integer", default = 50),
+    make_option(c("--max-depth"), type = "integer", default = 10),
+    make_option(c("--min-rows"), type = "integer", default = 5),
+    make_option(c("--sample-rate"), type = "double", default = 0.8),
+    make_option(c("--col-sample-rate-per-tree"), type = "double", default = 0.8),
+    make_option(c("--balance-classes"), action = "store_true", default = FALSE),
+    make_option(c("--train-frac"), type = "double", default = 1.0),
+    make_option(c("--round"), type = "integer", default = NA),
+    make_option(c("--seed"), type = "integer", default = 1),
+    make_option(c("--fallback"), type = "character", default = "none"),
+    make_option(c("--h2o-shutdown"), action = "store_true", default = FALSE),
+    make_option(c("--quiet"), action = "store_true", default = FALSE)
+  )
+  opt <- parse_args(OptionParser(option_list = option_list), args = args)
+  cols <- if (!is.null(opt$cols)) strsplit(opt$cols, ",")[[1]] else NULL
+  df <- imputeflow:::read_stdin_csv(verbose = !opt$quiet)
+  out <- imputeflow:::apply_imputation(df, "drf", cols = cols, opts = list(
     ntrees       = opt$ntrees,
     max_depth    = opt$`max-depth`,
-    seed         = opt$seed,
-    train_frac   = opt$`train-frac`,
-    h2o_threads  = if (!is.na(opt$`h2o-threads`)) opt$`h2o-threads` else NULL,
-    h2o_mem      = opt$`h2o-mem`,
-    fallback     = opt$fallback,
-    h2o_shutdown = opt$`h2o-shutdown`,
-    round_digits = opt$`round-digits`,
     min_rows     = opt$`min-rows`,
     sample_rate  = opt$`sample-rate`,
     col_sample_rate_per_tree = opt$`col-sample-rate-per-tree`,
-    balance_classes = opt$`balance-classes`
-  ),
-  verbose = verbose
+    balance_classes = opt$`balance-classes`,
+    seed         = opt$seed,
+    fallback     = opt$fallback,
+    round_digits = opt$round,
+    train_frac   = opt$`train-frac`,
+    h2o_shutdown = opt$`h2o-shutdown`
+  ), verbose = !opt$quiet)
+  imputeflow:::write_stdout_csv(out, verbose = !opt$quiet)
+  if (isTRUE(opt$`h2o-shutdown`)) {
+    tryCatch(h2o::h2o.shutdown(prompt = FALSE), error = function(e) NULL)
+  }
+}
+
+dispatch <- list(
+  mean   = run_mean,
+  median = run_median,
+  mode   = run_mode,
+  knn    = run_knn,
+  drf    = run_drf
 )
-imputeflow:::write_stdout_csv(df_out, verbose = verbose)
-if (verbose) cli_alert_success("Done")
-if (isTRUE(opt$`h2o-shutdown`)) {
-  tryCatch(h2o::h2o.shutdown(prompt = FALSE), error = function(e) NULL)
+
+if (method %in% names(dispatch)) {
+  dispatch[[method]]()
+} else {
+  cli::cli_alert_danger("Unknown method: {method}")
+  quit(status = 2)
 }

@@ -2,42 +2,51 @@
 % Please edit documentation in R/impute_utils.R
 \name{impute_h2o_drf}
 \alias{impute_h2o_drf}
-\title{DRF (H2O) Model-based Imputation}
+\title{Impute missing values using an H2O Distributed Random Forest}
 \usage{
 impute_h2o_drf(
   df,
-  ntrees = 200,
-  max_depth = 20,
+  ntrees = 50,
+  max_depth = 10,
+  min_rows = 5,
+  sample_rate = 0.8,
+  col_sample_rate_per_tree = 0.8,
+  balance_classes = FALSE,
   seed = 1,
+  round_digits = NULL,
+  cols = NULL,
   h2o_connection = NULL,
   verbose = TRUE
 )
 }
 \arguments{
-\item{df}{A data.frame or tibble.}
+\item{df}{Data frame containing the data to impute}
 
-\item{ntrees}{Number of trees. Default: 200.}
+\item{ntrees}{Number of trees in the random forest (default 50)}
 
-\item{max_depth}{Max tree depth. Default: 20.}
+\item{max_depth}{Maximum depth of each tree (default 10)}
 
-\item{seed}{RNG seed. Default: 1.}
+\item{min_rows}{Minimum number of observations in a terminal node (default 5)}
 
-\item{h2o_connection}{Optional; if NULL will call h2o::h2o.init().}
+\item{sample_rate}{Fraction of rows sampled per tree (default 0.8)}
 
-\item{verbose}{Logical; print progress. Default: TRUE.}
+\item{col_sample_rate_per_tree}{Fraction of columns sampled per tree (default 0.8)}
+
+\item{balance_classes}{Logical; whether to balance classes (only relevant for classification)}
+
+\item{seed}{Random seed for reproducibility (default 1)}
+
+\item{round_digits}{Optional integer; number of decimal places to round numeric imputations}
+
+\item{cols}{Optional character vector specifying which columns to impute (if NULL, all columns)}
+
+\item{h2o_connection}{Optional; existing H2O connection (NULL to start/reuse a connection)}
+
+\item{verbose}{Logical; print progress messages (default TRUE)}
 }
 \value{
-A data.frame with model-based imputations applied.
+A data frame with imputed values
 }
 \description{
-For each column with missing values, trains an H2O Distributed Random Forest
-using all \emph{other} columns as predictors, fits on rows where the target is observed,
-predicts for rows where it is missing, and writes back predictions.
-}
-\details{
-\itemize{
-\item Characters are treated as factors (categoricals) for H2O.
-\item Numeric targets use regression; categorical targets use classification.
-\item Columns with all NA or no variance are skipped.
-}
+Impute missing values using an H2O Distributed Random Forest
 }

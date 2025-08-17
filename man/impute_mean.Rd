@@ -2,16 +2,24 @@
 % Please edit documentation in R/impute_utils.R
 \name{impute_mean}
 \alias{impute_mean}
-\title{Impute mean for each numeric column in a data.frame}
+\title{Impute mean for numeric columns.}
 \usage{
-impute_mean(df)
+impute_mean(df, train_frac = 1, seed = 1)
 }
 \arguments{
-\item{df}{A data.frame with possible missing values}
+\item{df}{A data frame.}
+
+\item{train_frac}{Fraction of rows to use when computing the mean.}
+
+\item{seed}{RNG seed for reproducible sampling.}
 }
 \value{
-A data.frame with missing numeric values replaced by the column mean
+A data frame with missing numeric values replaced by the mean.
 }
 \description{
-Impute mean for each numeric column in a data.frame
+For each numeric column in `df`, this function computes the mean on
+a random training subset (controlled by `train_frac` and `seed`) and
+replaces any missing values in that column with the computed mean.
+Only columns containing missing values are modified.  Non-numeric
+columns are returned unchanged.
 }

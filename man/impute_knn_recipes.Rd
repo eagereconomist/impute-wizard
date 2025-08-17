@@ -2,24 +2,42 @@
 % Please edit documentation in R/impute_utils.R
 \name{impute_knn_recipes}
 \alias{impute_knn_recipes}
-\title{kNN Imputation (tidymodels/recipes)}
+\title{k-Nearest Neighbours imputation using the `recipes` package.}
 \usage{
-impute_knn_recipes(df, cols = NULL, neighbors = 5, id_cols = NULL)
+impute_knn_recipes(
+  df,
+  cols = NULL,
+  neighbors = 5,
+  id_cols = NULL,
+  train_frac = 1,
+  seed = 1
+)
 }
 \arguments{
-\item{df}{A data.frame or tibble.}
+\item{df}{A data frame.}
 
-\item{cols}{Columns to impute; tidy-select (bare selectors) or character vector.
-Default: all columns that contain any NA.}
+\item{cols}{A tidyselect specification or character vector of
+columns to impute.  If NULL, all columns are
+eligible.}
 
-\item{neighbors}{Number of neighbors (k). Default: 5.}
+\item{neighbors}{Number of neighbours to use for kNN (default 5).}
 
-\item{id_cols}{Optional tidy-select or character vector of ID/index-like columns to
-EXCLUDE from neighbor distance calculation. They remain in output.}
+\item{id_cols}{Columns to assign the role "id" (excluded from
+distance computation).}
+
+\item{train_frac}{Fraction of rows to use for training (default 1).}
+
+\item{seed}{RNG seed for sampling the training subset.}
 }
 \value{
-A data.frame with NAs imputed (same column classes as input).
+A data frame with kNN-based imputations applied.
 }
 \description{
-Impute missing values using k-nearest neighbors on selected columns.
+Performs kNN imputation via the tidymodels/recipes framework.  A
+training/test split (controlled by `train_frac` and `seed`) is used
+to avoid data leakage.  Only columns specified in `cols` (if
+provided) are considered for imputation; otherwise all columns are
+candidates.  Only columns actually containing missing values are
+imputed.  ID columns can be excluded from the distance calculation
+via `id_cols`.
 }

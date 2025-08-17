@@ -2,16 +2,24 @@
 % Please edit documentation in R/impute_utils.R
 \name{impute_mode}
 \alias{impute_mode}
-\title{Impute mode for columns (numeric or character)}
+\title{Impute mode for columns.}
 \usage{
-impute_mode(df)
+impute_mode(df, train_frac = 1, seed = 1)
 }
 \arguments{
-\item{df}{data.frame}
+\item{df}{A data frame.}
+
+\item{train_frac}{Fraction of rows to use when computing the mean.}
+
+\item{seed}{RNG seed for reproducible sampling.}
 }
 \value{
-data.frame
+A data frame with missing values replaced by the mode.
 }
 \description{
-Impute mode for columns (numeric or character)
+Replaces missing values in numeric, character, or factor columns with
+the most frequently occurring value (mode) computed on a training
+subset.  Character and factor columns are normalised via
+`replace_missing_strings()` before computing the mode.  The
+original type of each column is preserved in the result.
 }

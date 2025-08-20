@@ -28,130 +28,561 @@ Use --help with a method to see its options, e.g.:
 method <- tolower(argv[1])
 args   <- argv[-1]
 
+#' Parse a comma-separated list of column names
+#' @keywords internal
+#' @noRd
+parse_cols <- function(x) {
+  if (is.null(x) || is.na(x) || !nzchar(x)) return(NULL)
+  cols <- strsplit(x, ",", fixed = TRUE)[[1]]
+  cols <- trimws(cols)
+  cols <- cols[nzchar(cols)]
+  unique(cols)
+}
+
+#' Read CSV from stdin
+#' @keywords internal
+#' @noRd
+read_stdin_csv <- function(verbose = FALSE, spinner = NULL) {
+  if (!requireNamespace("readr", quietly = TRUE)) {
+    stop("Package 'readr' is required for CLI IO. Install it first.", call. = FALSE)
+  }
+  df <- readr::read_csv(file("stdin"), show_col_types = FALSE)
+
+  if (is.function(df)) {
+    cli::cli_abort(c(
+      "x Internal error: read_stdin_csv() received a function, not data.",
+      "i Did you accidentally write {.code df <- readr::read_csv} without parentheses?",
+      "i It must be {.code df <- readr::read_csv(file('stdin'), show_col_types = FALSE)}"
+    ))
+  }
+
+  as.data.frame(df, stringsAsFactors = FALSE)
+}
+
+#' Write CSV to stdout
+#' @keywords internal
+#' @noRd
+write_stdout_csv <- function(df, verbose = FALSE, spinner = NULL) {
+  if (!requireNamespace("readr", quietly = TRUE)) {
+    stop("Package 'readr' is required for CLI IO. Install it first.", call. = FALSE)
+  }
+  readr::write_csv(df, stdout())
+  invisible(df)
+}
+
+#' Common CLI options for fit/apply style commands
+#' @keywords internal
+#' @noRd
+common_fit_apply_opts <- function() {
+  list(
+    make_option(c("--mode"), type = "character", default = "fit-apply",
+                help = "One of: fit, apply, fit-apply (default)"),
+    make_option(c("--save-spec"), type = "character", default = NULL,
+                help = "Path to save the fitted imputer spec (fit or fit-apply)"),
+    make_option(c("--load-spec"), type = "character", default = NULL,
+                help = "Path to load an existing imputer spec (apply)"),
+    make_option(c("-c", "--cols"), type = "character", default = NULL,
+                help = "Comma-separated columns to impute (default: auto/all)"),
+    make_option(c("--exclude-predictors"), type = "character", default = NULL,
+                help = "Comma-separated predictor columns to EXCLUDE (kNN/DRF)"),
+    make_option(c("--train-frac"), type = "double", default = 1.0,
+                help = "Fraction of rows to use as training (0-1] if no train rows/mask"),
+    make_option(c("--train-rows"), type = "character", default = NULL,
+                help = "Path to newline-separated 1-based row indices for training"),
+    make_option(c("--train-mask"), type = "character", default = NULL,
+                help = "Path to CSV containing a boolean mask column for training rows"),
+    make_option(c("--mask-col"), type = "character", default = NULL,
+                help = "Column name in --train-mask to use (default: first logical)"),
+    make_option(c("--seed"), type = "integer", default = 1),
+    make_option(c("--round"), type = "integer", default = NA,
+                help = "Digits for final rounding (post-processing). Omit for no rounding."),
+    make_option(c("--quiet"), action = "store_true", default = FALSE)
+  )
+}
+
+#' Print a compact “columns” banner to CLI
+#' @keywords internal
+#' @noRd
+.print_cols_banner <- function(df, cols) {
+  target_cols <- if (!is.null(cols)) cols else names(df)
+  if (!is.null(cols)) {
+    max_cols <- 3
+    if (length(cols) > max_cols) {
+      short_cols <- paste(c(cols[1:max_cols], "..."), collapse = ", ")
+      cli::cli_alert_info("Columns      : {short_cols} ({length(cols)} total)")
+    } else {
+      cli::cli_alert_info("Columns      : {paste(cols, collapse = ', ')}")
+    }
+  } else {
+    cli::cli_alert_info("Columns        : All Columns ({length(target_cols)} total)")
+  }
+}
+
+#' Begin redirecting base R stdout/messages to terminal stderr
+#' @keywords internal
+#' @noRd
+redirect_start <- function() {
+  old_out <- sink.number()
+  old_msg <- sink.number(type = "message")
+  sink(stderr())
+  sink(stderr(), type = "message")
+  list(old_out = old_out, old_msg = old_msg)
+}
+
+#' Stop redirecting and restore previous sinks
+#' @keywords internal
+#' @noRd
+redirect_stop <- function(state) {
+  while (sink.number(type = "message") > state$old_msg) {
+    try(sink(type = "message"), silent = TRUE)
+  }
+  while (sink.number() > state$old_out) {
+    try(sink(), silent = TRUE)
+  }
+}
+
+#' Run the mean CLI subcommand
+#' @keywords internal
+#' @noRd
 run_mean <- function() {
-  option_list <- list(
-    make_option(c("-c", "--cols"), type = "character", default = NULL),
-    make_option(c("--train-frac"), type = "double", default = 1.0),
-    make_option(c("--seed"), type = "integer", default = 1),
-    make_option(c("--round"), type = "integer", default = NA),
-    make_option(c("--quiet"), action = "store_true", default = FALSE)
-  )
+  option_list <- c(common_fit_apply_opts())
   opt <- parse_args(OptionParser(option_list = option_list), args = args)
-  cols <- if (!is.null(opt$cols)) strsplit(opt$cols, ",")[[1]] else NULL
-  df <- imputeflow:::read_stdin_csv(verbose = !opt$quiet)
-  out <- imputeflow::impute_mean(df, train_frac = opt$`train-frac`, seed = opt$seed)
-  if (!is.na(opt$round)) {
-    out <- imputeflow:::round_imputed_numerics(df, out, digits = opt$round)
+
+  cli::cli_h1("imputeflow")
+  cli::cli_alert_info("Method  : MEAN")
+  cli::cli_alert_info("Mode    : {opt$mode} | Training fraction (fallback): {opt$`train-frac`}")
+
+  df   <- read_stdin_csv(verbose = !opt$quiet)
+  cols <- parse_cols(opt$cols)
+  .print_cols_banner(df, cols)
+
+  train_rows <- imputeflow:::resolve_train_rows(
+    df, opt$`train-rows`, opt$`train-mask`, opt$`mask-col`,
+    train_frac = opt$`train-frac`, seed = opt$seed
+  )
+
+  target_cols <- if (!is.null(cols)) cols else names(df)
+  eligible <- target_cols[vapply(
+    target_cols,
+    function(nm) is.numeric(df[[nm]]) && imputeflow:::needs_imputation(df[[nm]]),
+    logical(1)
+  )]
+  mode  <- match.arg(tolower(opt$mode), c("fit", "apply", "fit-apply"))
+
+  t0 <- Sys.time()
+  if (mode == "fit") {
+    if (is.null(opt$`save-spec`)) cli::cli_abort("--save-spec is required in 'fit' mode.")
+    spec <- imputeflow::fit_mean_spec(df, cols = eligible, train_rows = train_rows)
+    saveRDS(spec, opt$`save-spec`)
+    cli::cli_alert_success("Saved spec to {opt$`save-spec`}.")
+    invisible(NULL)
+  } else if (mode == "apply") {
+    if (is.null(opt$`load-spec`)) cli::cli_abort("--load-spec is required in 'apply' mode.")
+    spec <- readRDS(opt$`load-spec`)
+    out <- imputeflow::apply_mean_spec(df, spec, round_digits = opt$round)
+    write_stdout_csv(out, verbose = !opt$quiet)
+  } else {
+    spec <- imputeflow::fit_mean_spec(df, cols = eligible, train_rows = train_rows)
+    out  <- imputeflow::apply_mean_spec(df, spec, round_digits = opt$round)
+    if (!is.null(opt$`save-spec`)) {
+      saveRDS(spec, opt$`save-spec`)
+      cli::cli_alert_info("Saved spec to {opt$`save-spec`}.")
+    }
+    write_stdout_csv(out, verbose = !opt$quiet)
   }
-  imputeflow:::write_stdout_csv(out, verbose = !opt$quiet)
+
+  dt <- round(difftime(Sys.time(), t0, units = "secs"), 2)
+  cli::cli_alert_success("Completed mean in {dt} seconds.")
 }
 
+#' Run the median CLI subcommand
+#' @keywords internal
+#' @noRd
 run_median <- function() {
-  option_list <- list(
-    make_option(c("-c", "--cols"), type = "character", default = NULL),
-    make_option(c("--train-frac"), type = "double", default = 1.0),
-    make_option(c("--seed"), type = "integer", default = 1),
-    make_option(c("--round"), type = "integer", default = NA),
-    make_option(c("--quiet"), action = "store_true", default = FALSE)
-  )
+  option_list <- c(common_fit_apply_opts())
   opt <- parse_args(OptionParser(option_list = option_list), args = args)
-  cols <- if (!is.null(opt$cols)) strsplit(opt$cols, ",")[[1]] else NULL
-  df <- imputeflow:::read_stdin_csv(verbose = !opt$quiet)
-  out <- imputeflow::impute_median(df, train_frac = opt$`train-frac`, seed = opt$seed)
-  if (!is.na(opt$round)) {
-    out <- imputeflow:::round_imputed_numerics(df, out, digits = opt$round)
+
+  df <- read_stdin_csv(verbose = !opt$quiet)
+  cli::cli_h1("imputeflow")
+  cli::cli_alert_info("Method  : MEDIAN")
+  cli::cli_alert_info("Mode    : {opt$mode} | Training fraction (fallback): {opt$`train-frac`}")
+
+  cols <- parse_cols(opt$cols)
+  .print_cols_banner(df, cols)
+
+  train_rows <- imputeflow:::resolve_train_rows(
+    df, opt$`train-rows`, opt$`train-mask`, opt$`mask-col`,
+    train_frac = opt$`train-frac`, seed = opt$seed
+  )
+
+  target_cols <- if (!is.null(cols)) cols else names(df)
+  eligible <- target_cols[vapply(
+    target_cols,
+    function(nm) is.numeric(df[[nm]]) && imputeflow:::needs_imputation(df[[nm]]),
+    logical(1)
+  )]
+  mode  <- match.arg(tolower(opt$mode), c("fit", "apply", "fit-apply"))
+
+  t0 <- Sys.time()
+  if (mode == "fit") {
+    if (is.null(opt$`save-spec`)) cli::cli_abort("--save-spec is required in 'fit' mode.")
+    spec <- imputeflow::fit_median_spec(df, cols = eligible, train_rows = train_rows)
+    saveRDS(spec, opt$`save-spec`)
+    cli::cli_alert_success("Saved spec to {opt$`save-spec`}.")
+  } else if (mode == "apply") {
+    if (is.null(opt$`load-spec`)) cli::cli_abort("--load-spec is required in 'apply' mode.")
+    spec <- readRDS(opt$`load-spec`)
+    out <- imputeflow::apply_median_spec(df, spec, round_digits = opt$round)
+    write_stdout_csv(out, verbose = !opt$quiet)
+  } else {
+    spec <- imputeflow::fit_median_spec(df, cols = eligible, train_rows = train_rows)
+    out  <- imputeflow::apply_median_spec(df, spec, round_digits = opt$round)
+    if (!is.null(opt$`save-spec`)) {
+      saveRDS(spec, opt$`save-spec`)
+      cli::cli_alert_info("Saved spec to {opt$`save-spec`}.")
+    }
+    write_stdout_csv(out, verbose = !opt$quiet)
   }
-  imputeflow:::write_stdout_csv(out, verbose = !opt$quiet)
+
+  dt <- round(difftime(Sys.time(), t0, units = "secs"), 2)
+  cli::cli_alert_success("Completed median in {dt} seconds.")
 }
 
+#' Run the mode CLI subcommand
+#' @keywords internal
+#' @noRd
 run_mode <- function() {
-  option_list <- list(
-    make_option(c("-c", "--cols"), type = "character", default = NULL),
-    make_option(c("--train-frac"), type = "double", default = 1.0),
-    make_option(c("--seed"), type = "integer", default = 1),
-    make_option(c("--round"), type = "integer", default = NA),
-    make_option(c("--quiet"), action = "store_true", default = FALSE)
-  )
+  option_list <- c(common_fit_apply_opts())
   opt <- parse_args(OptionParser(option_list = option_list), args = args)
-  cols <- if (!is.null(opt$cols)) strsplit(opt$cols, ",")[[1]] else NULL
-  df <- imputeflow:::read_stdin_csv(verbose = !opt$quiet)
-  out <- imputeflow::impute_mode(df, train_frac = opt$`train-frac`, seed = opt$seed)
-  if (!is.na(opt$round)) {
-    out <- imputeflow:::round_imputed_numerics(df, out, digits = opt$round)
+
+  df <- read_stdin_csv(verbose = !opt$quiet)
+  cli::cli_h1("imputeflow")
+  cli::cli_alert_info("Method  : MODE")
+  cli::cli_alert_info("Mode    : {opt$mode} | Training fraction (fallback): {opt$`train-frac`}")
+
+  cols <- parse_cols(opt$cols)
+  .print_cols_banner(df, cols)
+
+  train_rows <- imputeflow:::resolve_train_rows(
+    df, opt$`train-rows`, opt$`train-mask`, opt$`mask-col`,
+    train_frac = opt$`train-frac`, seed = opt$seed
+  )
+
+  target_cols <- if (!is.null(cols)) cols else names(df)
+  eligible <- target_cols[vapply(
+    target_cols,
+    function(nm) imputeflow:::needs_imputation(df[[nm]]),
+    logical(1)
+  )]
+  mode  <- match.arg(tolower(opt$mode), c("fit", "apply", "fit-apply"))
+
+  t0 <- Sys.time()
+  if (mode == "fit") {
+    if (is.null(opt$`save-spec`)) cli::cli_abort("--save-spec is required in 'fit' mode.")
+    spec <- imputeflow::fit_mode_spec(df, cols = eligible, train_rows = train_rows)
+    saveRDS(spec, opt$`save-spec`)
+    cli::cli_alert_success("Saved spec to {opt$`save-spec`}.")
+  } else if (mode == "apply") {
+    if (is.null(opt$`load-spec`)) cli::cli_abort("--load-spec is required in 'apply' mode.")
+    spec <- readRDS(opt$`load-spec`)
+    out <- imputeflow::apply_mode_spec(df, spec, round_digits = opt$round)
+    write_stdout_csv(out, verbose = !opt$quiet)
+  } else {
+    spec <- imputeflow::fit_mode_spec(df, cols = eligible, train_rows = train_rows)
+    out  <- imputeflow::apply_mode_spec(df, spec, round_digits = opt$round)
+    if (!is.null(opt$`save-spec`)) {
+      saveRDS(spec, opt$`save-spec`)
+      cli::cli_alert_info("Saved spec to {opt$`save-spec`}.")
+    }
+    write_stdout_csv(out, verbose = !opt$quiet)
   }
-  imputeflow:::write_stdout_csv(out, verbose = !opt$quiet)
+
+  dt <- round(difftime(Sys.time(), t0, units = "secs"), 2)
+  cli::cli_alert_success("Completed mode in {dt} seconds.")
 }
 
+#' Run the knn CLI subcommand
+#' @keywords internal
+#' @noRd
 run_knn <- function() {
-  option_list <- list(
-    make_option(c("-c", "--cols"), type = "character", default = NULL),
-    make_option(c("--neighbors"), type = "integer", default = 5),
-    make_option(c("--train-frac"), type = "double", default = 1.0),
-    make_option(c("--seed"), type = "integer", default = 1),
-    make_option(c("--round"), type = "integer", default = NA),
-    make_option(c("--quiet"), action = "store_true", default = FALSE)
+  option_list <- c(
+    common_fit_apply_opts(),
+    make_option(c("--neighbors"), type = "integer", default = 5)
   )
   opt <- parse_args(OptionParser(option_list = option_list), args = args)
 
-  cols <- if (!is.null(opt$cols)) strsplit(opt$cols, ",")[[1]] else NULL
+  df <- read_stdin_csv(verbose = !opt$quiet)
+  cli::cli_h1("imputeflow")
+  cli::cli_alert_info("Method  : kNN")
+  cli::cli_alert_info("Mode    : {opt$mode} | Neighbors: {opt$neighbors} | Training fraction (fallback): {opt$`train-frac`}")
 
-  #  Load input from stdin
-  df <- imputeflow:::read_stdin_csv(verbose = !opt$quiet)
+  cols <- parse_cols(opt$cols)
+  excl <- parse_cols(opt$`exclude-predictors`)
+  .print_cols_banner(df, cols)
 
-  #  Impute
-  out <- imputeflow::impute_knn_recipes(
-    df,
-    cols = cols,
-    neighbors = opt$neighbors,
-    train_frac = opt$`train-frac`,
-    seed = opt$seed
+  train_rows <- imputeflow:::resolve_train_rows(
+    df, opt$`train-rows`, opt$`train-mask`, opt$`mask-col`,
+    train_frac = opt$`train-frac`, seed = opt$seed
   )
 
-  #  Apply rounding if requested
-  if (!is.na(opt$round)) {
-    out <- imputeflow:::round_imputed_numerics(df, out, digits = opt$round)
+  numeric_cols <- names(df)[vapply(df, is.numeric, logical(1))]
+  if (!is.null(cols)) numeric_cols <- intersect(numeric_cols, cols)
+  eligible <- numeric_cols[vapply(df[numeric_cols], function(x) any(is.na(x)), logical(1))]
+  mode  <- match.arg(tolower(opt$mode), c("fit", "apply", "fit-apply"))
+
+  t0 <- Sys.time()
+  if (mode == "fit") {
+    if (is.null(opt$`save-spec`)) cli::cli_abort("--save-spec is required in 'fit' mode.")
+    spec <- imputeflow::fit_knn_spec(
+      df, cols = eligible, neighbors = opt$neighbors, train_rows = train_rows,
+      exclude_predictors = excl
+    )
+    saveRDS(spec, opt$`save-spec`)
+    cli::cli_alert_success("Saved spec to {opt$`save-spec`}.")
+  } else if (mode == "apply") {
+    if (is.null(opt$`load-spec`)) cli::cli_abort("--load-spec is required in 'apply' mode.")
+    spec <- readRDS(opt$`load-spec`)
+    out <- imputeflow::apply_knn_spec(df, spec, round_digits = opt$round)
+    write_stdout_csv(out, verbose = !opt$quiet)
+  } else {
+    spec <- imputeflow::fit_knn_spec(
+      df, cols = eligible, neighbors = opt$neighbors, train_rows = train_rows,
+      exclude_predictors = excl
+    )
+    out  <- imputeflow::apply_knn_spec(df, spec, round_digits = opt$round)
+    if (!is.null(opt$`save-spec`)) {
+      saveRDS(spec, opt$`save-spec`)
+      cli::cli_alert_info("Saved spec to {opt$`save-spec`}.")
+    }
+    write_stdout_csv(out, verbose = !opt$quiet)
   }
 
-  # Write to stdout — this is what was missing
-  imputeflow:::write_stdout_csv(out, verbose = !opt$quiet)
+  dt <- round(difftime(Sys.time(), t0, units = "secs"), 2)
+  cli::cli_alert_success("Completed kNN in {dt} seconds.")
 }
 
+#' Run the drf CLI subcommand (styled)
+#'
+#' Streams H2O chatter to stderr; prints colored per-column lines like
+#' "→ imputing column : demog_age" to stderr; writes imputed CSV to stdout.
+#' Theme can be changed with env var IMPUTEFLOW_STYLE = vivid|minimal.
+#' @keywords internal
+#' @noRd
 run_drf <- function() {
-  option_list <- list(
-    make_option(c("-c", "--cols"), type = "character", default = NULL),
+  option_list <- c(
+    common_fit_apply_opts(),
     make_option(c("--ntrees"), type = "integer", default = 50),
     make_option(c("--max-depth"), type = "integer", default = 10),
     make_option(c("--min-rows"), type = "integer", default = 5),
     make_option(c("--sample-rate"), type = "double", default = 0.8),
     make_option(c("--col-sample-rate-per-tree"), type = "double", default = 0.8),
     make_option(c("--balance-classes"), action = "store_true", default = FALSE),
-    make_option(c("--train-frac"), type = "double", default = 1.0),
-    make_option(c("--round"), type = "integer", default = NA),
-    make_option(c("--seed"), type = "integer", default = 1),
-    make_option(c("--fallback"), type = "character", default = "none"),
-    make_option(c("--h2o-shutdown"), action = "store_true", default = FALSE),
-    make_option(c("--quiet"), action = "store_true", default = FALSE)
+    make_option(c("--h2o-threads"), type = "integer", default = NA_integer_),
+    make_option(c("--h2o-mem"), type = "character", default = NULL),
+    make_option(c("--fallback"), type = "character", default = "none",
+                help = "Fallback if DRF doesn't reduce missingness: none|mean|median|mode"),
+    make_option(c("--h2o-shutdown"), action = "store_true", default = FALSE)
   )
   opt <- parse_args(OptionParser(option_list = option_list), args = args)
-  cols <- if (!is.null(opt$cols)) strsplit(opt$cols, ",")[[1]] else NULL
-  df <- imputeflow:::read_stdin_csv(verbose = !opt$quiet)
-  out <- imputeflow:::apply_imputation(df, "drf", cols = cols, opts = list(
-    ntrees       = opt$ntrees,
-    max_depth    = opt$`max-depth`,
-    min_rows     = opt$`min-rows`,
-    sample_rate  = opt$`sample-rate`,
+
+  if (!is.null(opt$`save-spec`) || !is.null(opt$`load-spec`) || tolower(opt$mode) != "fit-apply") {
+    cli::cli_abort(c(
+      "x DRF currently supports only {.code --mode fit-apply} in a single session.",
+      "i Spec save/load for DRF is not yet supported."
+    ))
+  }
+
+  style <- tolower(Sys.getenv("IMPUTEFLOW_STYLE", "vivid"))
+  theme <- switch(
+    style,
+    minimal = list(
+      ".impute .label"   = list(),
+      ".impute .val"     = list("font-weight" = "bold"),
+      ".impute .method"  = list(bold = TRUE),
+      ".impute .mode"    = list(bold = TRUE, color = "blue"),
+      ".impute .columns" = list(bold = TRUE),
+      ".impute .col"     = list(bold = TRUE),
+      ".impute .num"     = list(color = "blue"),
+      ".impute .mem"     = list(color = "magenta")
+    ),
+    list(
+      ".impute h1"       = list(color = "cyan"),
+      ".impute .label"   = list(color = "grey70"),
+      ".impute .val"     = list(color = "orange",  "font-weight" = "bold"),
+      ".impute .method"  = list(color = "orange",  "font-weight" = "bold"),
+      ".impute .mode"    = list(color = "purple",  "font-weight" = "bold"),
+      ".impute .columns" = list(color = "white"),
+      ".impute .col"     = list(color = "cyan",    "font-weight" = "bold"),
+      ".impute .num"     = list(color = "blue",    "font-weight" = "bold"),
+      ".impute .mem"     = list(color = "magenta", "font-weight" = "bold"),
+      ".impute .ok"      = list(color = "green"),
+      ".impute .warn"    = list(color = "yellow")
+    )
+  )
+  div_id <- cli::cli_div(class = "impute", theme = theme)
+  on.exit(cli::cli_end(div_id), add = TRUE)
+
+  df <- read_stdin_csv(verbose = !opt$quiet)
+  .line <- if (isTRUE(l10n_info()[["UTF-8"]])) "─" else "-"
+  hdr <- cli::rule(left = cli::col_cyan(cli::style_bold("imputeflow")), line = .line, col = "cyan")
+  cat(hdr, "\n", file = stderr(), sep = "")
+
+  mem_str <- if (is.null(opt$`h2o-mem`) || !nzchar(opt$`h2o-mem`)) "auto" else opt$`h2o-mem`
+
+  cli::cli_alert_info("Method       : {.method DRF}")
+  cli::cli_alert_info("Mode         : {.mode fit-apply}")
+  cli::cli_alert_info("Training Set : {.num {opt$`train-frac`}}")
+  cli::cli_alert_info("H2O Memory   : {.mem {mem_str}}")
+
+  cols <- parse_cols(opt$cols)
+  excl <- parse_cols(opt$`exclude-predictors`)
+  max_cols <- 3L
+  shown <- if (!is.null(cols)) cols else names(df)
+  short <- if (length(shown) > max_cols)
+    paste0(paste(shown[1:max_cols], collapse = ", "), ", ...")
+  else
+    paste(shown, collapse = ", ")
+  cli::cli_alert_info("Columns      : {.columns {short}} ({.num {length(shown)}} total)")
+
+  train_rows <- imputeflow:::resolve_train_rows(
+    df, opt$`train-rows`, opt$`train-mask`, opt$`mask-col`,
+    train_frac = opt$`train-frac`, seed = opt$seed
+  )
+
+  target_cols <- if (!is.null(cols)) cols else names(df)
+  eligible <- target_cols[vapply(
+    target_cols,
+    function(nm) imputeflow:::needs_imputation(df[[nm]]),
+    logical(1)
+  )]
+
+  t0 <- Sys.time()
+  before_na <- if (length(target_cols)) {
+    sum(vapply(df[, target_cols, drop = FALSE], function(x) sum(is.na(x)), integer(1)))
+  } else 0L
+
+  h2o_start_with_knobs <- function(h2o_mem, h2o_threads, verbose = TRUE) {
+    if (!requireNamespace("h2o", quietly = TRUE)) {
+      stop("Package 'h2o' is required. Install it first.", call. = FALSE)
+    }
+    nthreads_final  <- if (!is.null(h2o_threads) && !is.na(h2o_threads)) as.integer(h2o_threads) else -1L
+    mem_final       <- if (!is.null(h2o_mem) && nzchar(h2o_mem)) h2o_mem else NULL
+    ports           <- as.integer(54321:54329)
+    existing <- try(h2o::h2o.getConnection(), silent = TRUE)
+    need_restart <- inherits(existing, "H2OConnection") &&
+      (!is.null(mem_final) || !is.null(h2o_threads))
+    if (need_restart) {
+      suppressWarnings(try(h2o::h2o.shutdown(prompt = FALSE), silent = TRUE))
+      for (i in seq_len(50L)) {
+        Sys.sleep(0.2)
+        probe <- try(h2o::h2o.getConnection(), silent = TRUE)
+        if (inherits(probe, "try-error") || !inherits(probe, "H2OConnection")) break
+      }
+    }
+    if (!inherits(existing, "H2OConnection")) {
+      last_err <- NULL; started <- FALSE
+      for (p in ports) {
+        res <- try({
+          if (!isTRUE(verbose)) {
+            suppressWarnings(suppressMessages(
+              h2o::h2o.init(
+                nthreads = nthreads_final,
+                max_mem_size = mem_final,
+                port = p,
+                strict_version_check = FALSE
+              )
+            ))
+          } else {
+            h2o::h2o.init(
+              nthreads = nthreads_final,
+              max_mem_size = mem_final,
+              port = p,
+              strict_version_check = FALSE
+            )
+          }
+        }, silent = TRUE)
+        if (!inherits(res, "try-error")) { started <- TRUE; break }
+        last_err <- res
+      }
+      if (!started) {
+        msg <- tryCatch(conditionMessage(attr(last_err, "condition")), error = function(e) as.character(last_err))
+        stop(sprintf("Failed to start H2O (last error: %s)", msg), call. = FALSE)
+      }
+    }
+    invisible(h2o::h2o.getConnection())
+  }
+
+  sym <- cli::symbol
+  i <- 0L
+  hook <- if (length(eligible)) {
+    function() {
+      i <<- i + 1L
+      line <- paste0(
+        cli::col_silver(sym$arrow_right, " "),
+        cli::col_silver("imputing column : "),
+        cli::col_cyan(eligible[[i]])
+      )
+      cat(line, "\n", file = stderr(), sep = "")
+      flush.console()
+    }
+  } else NULL
+
+  state <- redirect_start()
+  on.exit(redirect_stop(state), add = TRUE)
+
+  h2o_conn <- h2o_start_with_knobs(
+    h2o_mem     = opt$`h2o-mem`,
+    h2o_threads = if (!is.na(opt$`h2o-threads`)) opt$`h2o-threads` else NULL,
+    verbose     = !opt$quiet
+  )
+
+  out <- imputeflow::impute_h2o_drf_fit_apply(
+    df,
+    cols                     = eligible,
+    exclude_predictors       = excl,
+    train_rows               = train_rows,
+    ntrees                   = opt$ntrees,
+    max_depth                = opt$`max-depth`,
+    min_rows                 = opt$`min-rows`,
+    sample_rate              = opt$`sample-rate`,
     col_sample_rate_per_tree = opt$`col-sample-rate-per-tree`,
-    balance_classes = opt$`balance-classes`,
-    seed         = opt$seed,
-    fallback     = opt$fallback,
-    round_digits = opt$round,
-    train_frac   = opt$`train-frac`,
-    h2o_shutdown = opt$`h2o-shutdown`
-  ), verbose = !opt$quiet)
-  imputeflow:::write_stdout_csv(out, verbose = !opt$quiet)
+    balance_classes          = opt$`balance-classes`,
+    seed                     = opt$seed,
+    round_digits             = opt$round,
+    h2o_threads              = if (!is.na(opt$`h2o-threads`)) opt$`h2o-threads` else NULL,
+    h2o_mem                  = opt$`h2o-mem`,
+    verbose                  = !opt$quiet,
+    progress_hook            = hook,
+    h2o_connection           = h2o_conn
+  )
+
+  redirect_stop(state)
+
+  after_na <- if (length(target_cols)) {
+    sum(vapply(out[, target_cols, drop = FALSE], function(x) sum(is.na(x)), integer(1)))
+  } else 0L
+
+  fb <- tolower(opt$fallback)
+  if (fb %in% c("mean", "median", "mode") && after_na >= before_na) {
+    cli::cli_alert_warning(
+      "DRF did not reduce missingness; applying fallback {.val {fb}}."
+    )
+    out <- switch(
+      fb,
+      mean   = imputeflow::apply_mean_spec(out,  imputeflow::fit_mean_spec(out,   cols = eligible, train_rows = train_rows), round_digits = opt$round),
+      median = imputeflow::apply_median_spec(out,imputeflow::fit_median_spec(out, cols = eligible, train_rows = train_rows), round_digits = opt$round),
+      mode   = imputeflow::apply_mode_spec(out,  imputeflow::fit_mode_spec(out,   cols = eligible, train_rows = train_rows), round_digits = opt$round),
+      out
+    )
+  }
+
+  write_stdout_csv(out, verbose = !opt$quiet)
+
   if (isTRUE(opt$`h2o-shutdown`)) {
     tryCatch(h2o::h2o.shutdown(prompt = FALSE), error = function(e) NULL)
   }
+  dt <- round(difftime(Sys.time(), t0, units = "secs"), 2)
+  cli::cli_alert_success("Completed DRF in {.num {dt}} seconds.")
 }
 
 dispatch <- list(

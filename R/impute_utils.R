@@ -1,5 +1,13 @@
-#' @param x A vector.
-#' @return A logical vector indicating missingness.
+#' Identify missing-like values
+#'
+#' Returns a logical vector marking values considered missing:
+#' standard NA plus empty strings and literal "NA" for character/factor inputs.
+#' @param x A vector of any base type.
+#' @return Logical vector of the same length as `x`.
+#' @examples
+#' missing_mask(c(NA, "", "NA", "x"))
+#' @keywords internal
+#' @noRd
 missing_mask <- function(x) {
   na_mask <- is.na(x)
   if (is.character(x) || is.factor(x)) {
@@ -9,14 +17,27 @@ missing_mask <- function(x) {
   na_mask
 }
 .is_missing <- missing_mask
+
+#' Does a vector contain any missing-like values?
+#'
+#' Wrapper over `missing_mask()` that checks if any element is missing-like.
 #' @param x A vector.
-#' @return Logical scalar indicating the presence of missing values.
+#' @return Logical scalar.
+#' @examples
+#' needs_imputation(c(1, NA, 3))
+#' @keywords internal
+#' @noRd
 needs_imputation <- function(x) {
   any(missing_mask(x), na.rm = TRUE)
 }
 
+#' Normalize missing-like strings to NA
+#'
+#' For character/factor vectors, converts "" and "NA" to actual NA values.
 #' @param x A vector.
-#' @return A vector with missing-like strings replaced by `NA`.
+#' @return A vector with "" and "NA" coerced to NA for chr/fct; unchanged otherwise.
+#' @keywords internal
+#' @noRd
 replace_missing_strings <- function(x) {
   if (is.character(x)) {
     x[x == "" | x == "NA"] <- NA
@@ -28,375 +49,433 @@ replace_missing_strings <- function(x) {
   x
 }
 
-#' @param df_before The original data frame prior to imputation.
-#' @param df_after  The data frame after imputation.
-#' @param digits    Number of decimal places to round to.
-#' @return A data frame with numeric imputations rounded.
-round_imputed_numerics <- function(df_before, df_after, digits = NULL) {
-  if (is.null(digits) || is.na(digits)) return(df_after)
-  stopifnot(is.data.frame(df_before), is.data.frame(df_after))
-  stopifnot(nrow(df_before) == nrow(df_after))
-  stopifnot(identical(names(df_before), names(df_after)))
-  out <- df_after
-  for (nm in names(out)) {
-    miss <- missing_mask(df_before[[nm]])
-    if (is.numeric(out[[nm]]) && any(miss, na.rm = TRUE)) {
-      out[[nm]][miss] <- round(out[[nm]][miss], digits = as.integer(digits))
-      if (inherits(df_before[[nm]], "integer") && as.integer(digits) == 0) {
-        ok <- !is.na(out[[nm]])
-        out[[nm]][ok] <- as.integer(out[[nm]][ok])
-      }
-    }
-  }
-  out
+#' Optionally round numeric columns after imputation
+#'
+#' Applies rounding only where both `original` and `imputed` columns are numeric.
+#' @param original Original data.frame before imputation.
+#' @param imputed Data.frame after imputation.
+#' @param digits Integer number of digits to round to; NA disables rounding.
+#' @return The `imputed` data.frame (rounded where applicable).
+#' @examples
+#' # round_imputed_numerics(orig_df, imp_df, digits = 2)
+#' @keywords internal
+#' @noRd
+round_imputed_numerics <- function(original, imputed, digits = NA) {
+  if (is.na(digits)) return(imputed)
+  roundable_cols <- names(imputed)[
+    vapply(imputed, is.numeric, logical(1)) &
+      vapply(original, is.numeric, logical(1))
+  ]
+  imputed[roundable_cols] <- lapply(imputed[roundable_cols], round, digits = digits)
+  imputed
 }
 
-#' @param df        A data frame.
-#' @param train_frac Fraction of rows to use when computing the mean.
-#' @param seed       RNG seed for reproducible sampling.
-#' @return A data frame with missing numeric values replaced by the mean.
+#' Fallback (“or else”) infix operator
+#'
+#' Returns `x` if it is non-empty (and not a zero-length/empty character),
+#' otherwise returns `y`.
+#' @name %||%
+#' @usage x %||% y
+#' @param x Primary value.
+#' @param y Fallback value.
+#' @return Either `x` or `y`.
+#' @keywords internal
+#' @noRd
+
+`%||%` <- function(x, y) if (is.null(x) || (is.character(x) && !nzchar(x))) y else x
+
+#' Fit a mean-imputation specification
+#'
+#' Computes column-wise means over training rows for numeric columns that have
+#' missing values.
+#' @param df Data frame to analyze.
+#' @param cols Optional character vector of target columns (default: auto-detect).
+#' @param train_rows Optional integer vector of row indices used to compute stats.
+#' @return A list with fields: `type = "mean"`, `cols`, and numeric `stats`.
 #' @export
-impute_mean <- function(df, train_frac = 1, seed = 1) {
-  if (!is.data.frame(df)) stop("`df` must be a data.frame", call. = FALSE)
-  if (!is.numeric(train_frac) || train_frac <= 0 || train_frac > 1)
-    stop("`train_frac` must be a number in (0,1].", call. = FALSE)
+#' @examples
+#' spec <- fit_mean_spec(iris, cols = "Sepal.Length")
+fit_mean_spec <- function(df, cols = NULL, train_rows = NULL) {
+  if (!inherits(df, "data.frame")) df <- as.data.frame(df, stringsAsFactors = FALSE)
+  out_cols <- if (is.null(cols)) names(df) else intersect(cols, names(df))
+  out_cols <- out_cols[vapply(df[out_cols], function(x) is.numeric(x) && needs_imputation(x), logical(1))]
   n <- nrow(df)
-  train_idx <- if (train_frac < 1) {
-    set.seed(seed); sample(seq_len(n), floor(train_frac * n))
-  } else seq_len(n)
+  if (is.null(train_rows)) train_rows <- seq_len(n)
+  stats <- vapply(out_cols, function(nm) mean(df[[nm]][train_rows], na.rm = TRUE), numeric(1))
+  list(type = "mean", cols = out_cols, stats = stats)
+}
+
+#' Apply a mean-imputation specification
+#'
+#' Fills missing values in the specified columns using the provided mean spec.
+#' @param df Data frame to impute.
+#' @param spec A spec produced by [fit_mean_spec()].
+#' @param round_digits Optional integer; round numeric columns post-imputation.
+#' @return Data frame with imputed values.
+#' @export
+apply_mean_spec <- function(df, spec, round_digits = NA) {
+  stopifnot(is.list(spec), identical(spec$type, "mean"))
+  if (!inherits(df, "data.frame")) df <- as.data.frame(df, stringsAsFactors = FALSE)
   out <- df
-  for (nm in names(out)) {
+  for (nm in spec$cols) {
+    if (!nm %in% names(out)) next
     col <- out[[nm]]
-    if (is.numeric(col) && needs_imputation(col)) {
-      stat <- mean(col[train_idx], na.rm = TRUE)
-      if (!is.na(stat)) {
-        mask <- missing_mask(col)
-        col[mask] <- stat
-      }
+    m <- spec$stats[[nm]]
+    if (!is.na(m)) {
+      mask <- missing_mask(col)
+      col[mask] <- m
       out[[nm]] <- col
     }
   }
-  out
+  round_imputed_numerics(df, out, digits = round_digits)
 }
 
-#' @inheritParams impute_mean
-#' @return A data frame with missing numeric values replaced by the median.
+#' Fit a median-imputation specification
+#'
+#' Computes column-wise medians over training rows for numeric columns that have
+#' missing values.
+#' @inheritParams fit_mean_spec
+#' @return A list with fields: `type = "median"`, `cols`, and numeric `stats`.
 #' @export
-impute_median <- function(df, train_frac = 1, seed = 1) {
-  if (!is.data.frame(df)) stop("`df` must be a data.frame", call. = FALSE)
-  if (!is.numeric(train_frac) || train_frac <= 0 || train_frac > 1)
-    stop("`train_frac` must be a number in (0,1].", call. = FALSE)
-  n <- nrow(df)
-  train_idx <- if (train_frac < 1) {
-    set.seed(seed); sample(seq_len(n), floor(train_frac * n))
-  } else seq_len(n)
+fit_median_spec <- function(df, cols = NULL, train_rows = NULL) {
+  if (!inherits(df, "data.frame")) df <- as.data.frame(df, stringsAsFactors = FALSE)
+  out_cols <- if (is.null(cols)) names(df) else intersect(cols, names(df))
+  out_cols <- out_cols[vapply(df[out_cols], function(x) is.numeric(x) && needs_imputation(x), logical(1))]
+  n <- nrow(df); if (is.null(train_rows)) train_rows <- seq_len(n)
+  stats <- vapply(out_cols, function(nm) stats::median(df[[nm]][train_rows], na.rm = TRUE), numeric(1))
+  list(type = "median", cols = out_cols, stats = stats)
+}
+
+#' Apply a median-imputation specification
+#'
+#' Fills missing values in the specified columns using the provided median spec.
+#' @param df Data frame to impute.
+#' @param spec A spec produced by [fit_median_spec()].
+#' @param round_digits Optional integer; round numeric columns post-imputation.
+#' @return Data frame with imputed values.
+#' @export
+apply_median_spec <- function(df, spec, round_digits = NA) {
+  stopifnot(is.list(spec), identical(spec$type, "median"))
+  if (!inherits(df, "data.frame")) df <- as.data.frame(df, stringsAsFactors = FALSE)
   out <- df
-  for (nm in names(out)) {
+  for (nm in spec$cols) {
+    if (!nm %in% names(out)) next
     col <- out[[nm]]
-    if (is.numeric(col) && needs_imputation(col)) {
-      stat <- stats::median(col[train_idx], na.rm = TRUE)
-      if (!is.na(stat)) {
-        mask <- missing_mask(col)
-        col[mask] <- stat
-      }
+    m <- spec$stats[[nm]]
+    if (!is.na(m)) {
+      mask <- missing_mask(col)
+      col[mask] <- m
       out[[nm]] <- col
     }
   }
-  out
+  round_imputed_numerics(df, out, digits = round_digits)
 }
 
-#' @inheritParams impute_mean
-#' @return A data frame with missing values replaced by the mode.
+#' Fit a mode-imputation specification
+#'
+#' Computes per-column modes over training rows (after normalizing "" and "NA"
+#' to missing). Works with numeric, character, and factor inputs.
+#' @inheritParams fit_mean_spec
+#' @return A list with fields: `type = "mode"`, `cols`, and list `stats`.
 #' @export
-impute_mode <- function(df, train_frac = 1, seed = 1) {
-  if (!is.data.frame(df)) stop("`df` must be a data.frame", call. = FALSE)
-  if (!is.numeric(train_frac) || train_frac <= 0 || train_frac > 1)
-    stop("`train_frac` must be a number in (0,1].", call. = FALSE)
-  n <- nrow(df)
-  train_idx <- if (train_frac < 1) {
-    set.seed(seed); sample(seq_len(n), floor(train_frac * n))
-  } else seq_len(n)
+fit_mode_spec <- function(df, cols = NULL, train_rows = NULL) {
+  if (!inherits(df, "data.frame")) df <- as.data.frame(df, stringsAsFactors = FALSE)
+  out_cols <- if (is.null(cols)) names(df) else intersect(cols, names(df))
+  out_cols <- out_cols[vapply(df[out_cols], needs_imputation, logical(1))]
+
+  n <- nrow(df); if (is.null(train_rows)) train_rows <- seq_len(n)
+
   mode_of <- function(x) {
     ux <- unique(x[!is.na(x)])
     if (!length(ux)) return(NA)
     ux[which.max(tabulate(match(x, ux)))]
   }
-  out <- df
-  for (nm in names(out)) {
-    col <- out[[nm]]
-    if (!needs_imputation(col)) next
-    col_norm <- replace_missing_strings(col)
-    train_vals <- col_norm[train_idx]
-    m <- mode_of(train_vals[!missing_mask(train_vals)])
-    if (!is.na(m)) {
-      mask <- missing_mask(col_norm)
-      col_norm[mask] <- m
-    }
-    if (is.factor(col)) out[[nm]] <- factor(col_norm) else
-    if (is.character(col)) out[[nm]] <- as.character(col_norm) else
-      out[[nm]] <- col_norm
-  }
-  out
+
+  stats <- lapply(out_cols, function(nm) {
+    col <- df[[nm]]
+    col_chr <- as.character(col)
+    col_chr[trimws(col_chr) == ""] <- NA_character_
+    col_chr[col_chr == "NA"] <- NA_character_
+    tr <- col_chr[train_rows]
+    mode_of(tr[!is.na(tr)])
+  })
+  names(stats) <- out_cols
+  list(type = "mode", cols = out_cols, stats = stats)
 }
 
-#' Impute missing values using kNN (recipes)
+#' Apply a mode-imputation specification
 #'
-#' @param df A data.frame or tibble
-#' @param cols Optional character vector of columns to impute. If NULL, auto-detect.
-#' @param neighbors Number of neighbors for imputation.
-#' @param train_frac Proportion of rows to use for training (0–1).
-#' @param seed Random seed.
-#' @return Tibble with imputed values.
+#' Fills missing values using the provided mode spec, then restores the original
+#' column classes (numeric/integer/logical/character/factor). Optional final
+#' rounding is applied to numeric columns.
+#' @param df Data frame to impute.
+#' @param spec A spec produced by [fit_mode_spec()].
+#' @param round_digits Optional integer; round numeric columns post-imputation.
+#' @return Data frame with imputed values.
 #' @export
-impute_knn_recipes <- function(df, cols = NULL, neighbors = 5, train_frac = 1.0, seed = 1) {
+apply_mode_spec <- function(df, spec, round_digits = NA) {
+  stopifnot(is.list(spec), identical(spec$type, "mode"))
+  if (!inherits(df, "data.frame")) df <- as.data.frame(df, stringsAsFactors = FALSE)
+  out <- df
+  for (nm in spec$cols) {
+    if (!nm %in% names(out)) next
+
+    original <- out[[nm]]
+    was_factor <- is.factor(original)
+    was_ordered <- is.ordered(original)
+
+    col_chr <- as.character(original)
+    col_chr[trimws(col_chr) == ""] <- NA_character_
+    col_chr[col_chr == "NA"] <- NA_character_
+
+    m <- spec$stats[[nm]]
+
+    if (!is.na(m)) {
+      fill <- is.na(col_chr)
+      if (any(fill)) col_chr[fill] <- as.character(m)
+    }
+
+    if (was_factor) {
+      old_lv <- levels(original)
+      new_vec <- factor(col_chr, levels = union(old_lv, as.character(m)))
+      if (was_ordered) new_vec <- factor(new_vec, levels = levels(new_vec), ordered = TRUE)
+      out[[nm]] <- new_vec
+    } else {
+      cls <- class(original)[1]
+      if (cls %in% c("numeric", "integer")) {
+        new_num <- suppressWarnings(as.numeric(col_chr))
+        out[[nm]] <- new_num
+      } else if (cls == "logical") {
+        low <- tolower(col_chr)
+        is_true  <- low %in% c("true", "t", "1", "yes", "y")
+        is_false <- low %in% c("false", "f", "0", "no", "n")
+        new_logical <- ifelse(is_true, TRUE, ifelse(is_false, FALSE, NA))
+        out[[nm]] <- new_logical
+      } else {
+        out[[nm]] <- col_chr
+      }
+    }
+  }
+  round_imputed_numerics(df, out, digits = round_digits)
+}
+
+
+#' Fit a kNN-imputation specification (recipes)
+#'
+#' Builds a recipes pipeline to impute specified numeric columns via kNN, using
+#' the provided training rows and predictor set.
+#' @param df Data frame.
+#' @param cols Optional numeric target columns (default: numeric columns with NA).
+#' @param neighbors Integer number of neighbors (k).
+#' @param train_rows Optional integer vector of training row indices.
+#' @param exclude_predictors Optional character vector of predictors to exclude.
+#' @return A list with fields: `type = "knn"`, `cols`, `predictors`, `neighbors`,
+#'   and a prepped recipes object (`recipe`).
+#' @export
+#' @seealso recipes::step_impute_knn
+fit_knn_spec <- function(df, cols = NULL, neighbors = 5, train_rows = NULL,
+                         exclude_predictors = NULL) {
   stopifnot(is.data.frame(df))
   df <- tibble::as_tibble(df)
-  set.seed(seed)
 
-  # Only numeric columns are valid for kNN imputation
   numeric_cols <- names(df)[vapply(df, is.numeric, logical(1))]
-
-  # Auto-select columns with NAs
-  if (is.null(cols)) {
-    cols <- numeric_cols[vapply(df[numeric_cols], function(x) any(is.na(x)), logical(1))]
-  } else {
+  if (!is.null(cols)) {
     cols <- intersect(cols, numeric_cols)
+  } else {
+    cols <- numeric_cols[vapply(df[numeric_cols], function(x) any(is.na(x)), logical(1))]
   }
 
-  if (length(cols) == 0) {
-    cli::cli_alert_info("No eligible numeric columns with NAs for kNN imputation.")
-    return(df)
+  predictors <- setdiff(numeric_cols, exclude_predictors %||% character(0))
+  predictors <- union(predictors, cols)
+
+  if (is.null(train_rows)) train_rows <- seq_len(nrow(df))
+  df_recipe_all   <- dplyr::select(df, tidyselect::all_of(predictors))
+  df_train_recipe <- df_recipe_all[train_rows, , drop = FALSE]
+
+  rec <- recipes::recipe(~ ., data = df_train_recipe)
+  if (length(cols)) {
+    rec <- recipes::step_impute_knn(rec, !!!rlang::syms(cols), neighbors = neighbors)
+  } else {
+    return(list(
+      type        = "knn",
+      cols        = character(0),
+      predictors  = predictors,
+      neighbors   = neighbors,
+      recipe      = recipes::prep(rec, training = df_train_recipe, verbose = FALSE)
+    ))
   }
 
-  cli::cli_alert_info("Running kNN imputation on {length(cols)} column(s): {paste(cols, collapse = ', ')}")
+  rec_prep <- recipes::prep(rec, training = df_train_recipe, verbose = FALSE)
 
-  train_rows <- sample(seq_len(nrow(df)), size = floor(train_frac * nrow(df)))
-  df_train <- df[train_rows, ]
-
-  # Remove problematic columns entirely from the recipe input
-  df_recipe <- dplyr::select(df, all_of(cols))
-  df_train_recipe <- df_recipe[train_rows, ]
-
-  rec <- recipes::recipe(~ ., data = df_train_recipe) |>
-    recipes::step_impute_knn(all_of(cols), neighbors = neighbors)
-
-  rec_prep <- tryCatch(
-    recipes::prep(rec, training = df_train_recipe, verbose = FALSE),
-    error = function(e) {
-      cli::cli_alert_danger("Recipe prep failed: {e$message}")
-      stop(e)
-    }
+  list(
+    type       = "knn",
+    cols       = cols,
+    predictors = predictors,
+    neighbors  = neighbors,
+    recipe     = rec_prep
   )
-
-  imputed_subset <- tryCatch(
-    recipes::bake(rec_prep, new_data = df_recipe),
-    error = function(e) {
-      cli::cli_alert_danger("Recipe bake failed: {e$message}")
-      stop(e)
-    }
-  )
-
-  # Now replace the imputed columns back into the original full df
-  df[cols] <- imputed_subset[cols]
-
-  df
 }
 
-#' @param df Data frame containing the data to impute
-#' @param ntrees Number of trees in the random forest (default 50)
-#' @param max_depth Maximum depth of each tree (default 10)
-#' @param min_rows Minimum number of observations in a terminal node (default 5)
-#' @param sample_rate Fraction of rows sampled per tree (default 0.8)
-#' @param col_sample_rate_per_tree Fraction of columns sampled per tree (default 0.8)
-#' @param balance_classes Logical; whether to balance classes (only relevant for classification)
-#' @param seed Random seed for reproducibility (default 1)
-#' @param round_digits Optional integer; number of decimal places to round numeric imputations
-#' @param cols Optional character vector specifying which columns to impute (if NULL, all columns)
-#' @param h2o_connection Optional; existing H2O connection (NULL to start/reuse a connection)
-#' @param verbose Logical; print progress messages (default TRUE)
-#' @return A data frame with imputed values
+#' Apply a kNN-imputation specification (recipes)
+#'
+#' Applies a prepped recipes kNN spec to the input data. Ensures predictors
+#' exist, imputes the target columns, and optionally rounds numeric outputs.
+#' @param df Data frame to impute.
+#' @param spec A spec produced by [fit_knn_spec()].
+#' @param round_digits Optional integer; round numeric columns post-imputation.
+#' @return Data frame with imputed values.
 #' @export
-impute_h2o_drf <- function(df,
-                           ntrees = 50,
-                           max_depth = 10,
-                           min_rows = 5,
-                           sample_rate = 0.8,
-                           col_sample_rate_per_tree = 0.8,
-                           balance_classes = FALSE,
-                           seed = 1,
-                           round_digits = NULL,
-                           cols = NULL,
-                           h2o_connection = NULL,
-                           verbose = TRUE) {
-  stopifnot(is.data.frame(df))
+apply_knn_spec <- function(df, spec, round_digits = NA) {
+  stopifnot(is.list(spec), identical(spec$type, "knn"))
+  orig <- if (inherits(df, "data.frame")) df else as.data.frame(df, stringsAsFactors = FALSE)
+  df <- tibble::as_tibble(df)
+
+  miss <- setdiff(spec$predictors, names(df))
+  if (length(miss)) cli::cli_abort(c("x Missing predictor columns in input for kNN apply:", paste0("* ", miss)))
+
+  df_recipe <- dplyr::select(df, tidyselect::all_of(spec$predictors))
+  imputed_subset <- recipes::bake(spec$recipe, new_data = df_recipe)
+
+  df[spec$cols] <- imputed_subset[spec$cols]
+  if (!is.na(round_digits)) {
+    df_rounded <- round_imputed_numerics(orig, as.data.frame(df, stringsAsFactors = FALSE),
+                                         digits = round_digits)
+    df <- tibble::as_tibble(df_rounded)
+  }
+  as.data.frame(df, stringsAsFactors = FALSE)
+}
+
+#' Impute with H2O Distributed Random Forest (single-session fit & apply)
+#'
+#' For each target column with missingness, trains a DRF on observed rows and
+#' predicts missing entries, handling both numeric and factor targets. Optionally
+#' rounds numeric columns at the end.
+#' @param df Data frame.
+#' @param cols Optional target columns (default: auto-detect with missingness).
+#' @param exclude_predictors Optional predictors to exclude from modeling.
+#' @param train_rows Optional integer indices used for model training.
+#' @param ntrees,max_depth,min_rows,sample_rate,col_sample_rate_per_tree DRF params.
+#' @param balance_classes Logical; whether to balance classes for classification.
+#' @param seed Random seed.
+#' @param round_digits Optional integer; round numeric columns post-imputation.
+#' @param h2o_threads,h2o_mem,h2o_port,h2o_connection H2O cluster settings.
+#' @param verbose Logical; emit progress messages.
+#' @param progress_hook Optional callback invoked per target column.
+#' @return Data frame with imputed values.
+#' @export
+#' @seealso h2o::h2o.randomForest
+impute_h2o_drf_fit_apply <- function(df,
+                                     cols = NULL,
+                                     exclude_predictors = NULL,
+                                     train_rows = NULL,
+                                     ntrees = 50,
+                                     max_depth = 10,
+                                     min_rows = 5,
+                                     sample_rate = 0.8,
+                                     col_sample_rate_per_tree = 0.8,
+                                     balance_classes = FALSE,
+                                     seed = 1,
+                                     round_digits = NA,
+                                     h2o_threads = NULL,
+                                     h2o_mem = NULL,
+                                     h2o_port = "auto",
+                                     h2o_connection = NULL,
+                                     verbose = TRUE,
+                                     progress_hook = NULL) {
+  if (!inherits(df, "data.frame")) df <- as.data.frame(df, stringsAsFactors = FALSE)
   if (!requireNamespace("h2o", quietly = TRUE)) {
     stop("Package 'h2o' is required. Install it first.", call. = FALSE)
   }
 
-  qrun <- function(expr) {
-    if (exists("quiet_run", envir = asNamespace("imputeflow"), inherits = FALSE)) {
-      get("quiet_run", envir = asNamespace("imputeflow"))(substitute(expr))
-    } else {
-      eval.parent(substitute(expr))
-    }
-  }
+  nthreads_final <- if (!is.null(h2o_threads) && !is.na(h2o_threads)) as.integer(h2o_threads) else -1L
+  mem_final      <- if (!is.null(h2o_mem) && nzchar(h2o_mem)) h2o_mem else NULL
+  quiet_flag     <- !isTRUE(verbose)
+
   if (is.null(h2o_connection)) {
-    quiet_flag <- !isTRUE(verbose)
-    imputeflow::ensure_h2o(nthreads = 1L, quiet = quiet_flag)
-    conn_chk <- tryCatch(h2o::h2o.getConnection(), error = function(e) NULL)
-    if (is.null(conn_chk)) {
-      if (quiet_flag) {
-        suppressWarnings(suppressMessages(
-          qrun(h2o::h2o.init(nthreads = 1L, strict_version_check = FALSE))
-        ))
-      } else {
-        h2o::h2o.init(nthreads = 1L, strict_version_check = FALSE)
-      }
+    if (!is.null(mem_final) || !is.null(h2o_threads) || !identical(h2o_port, "auto")) {
+      suppressWarnings(try(h2o::h2o.shutdown(prompt = FALSE), silent = TRUE))
     }
-    conn_chk2 <- tryCatch(h2o::h2o.getConnection(), error = function(e) NULL)
-    if (is.null(conn_chk2)) {
-      if (quiet_flag) {
-        qrun(h2o::h2o.init(nthreads = 1L, strict_version_check = FALSE))
-      } else {
-        h2o::h2o.init(nthreads = 1L, strict_version_check = FALSE)
-      }
+    if (quiet_flag) {
+      suppressWarnings(suppressMessages(
+        try(h2o::h2o.init(nthreads = nthreads_final, max_mem_size = mem_final,
+                          strict_version_check = FALSE), silent = TRUE)
+      ))
+    } else {
+      try(h2o::h2o.init(nthreads = nthreads_final, max_mem_size = mem_final,
+                        strict_version_check = FALSE), silent = TRUE)
     }
   }
+
   classes <- vapply(df, function(x) class(x)[1], character(1))
   df2 <- df
   df2[] <- lapply(df2, replace_missing_strings)
   ch_cols <- names(df2)[vapply(df2, is.character, logical(1))]
-  if (length(ch_cols)) {
-    for (cc in ch_cols) df2[[cc]] <- as.factor(df2[[cc]])
-  }
+  if (length(ch_cols)) for (cc in ch_cols) df2[[cc]] <- as.factor(df2[[cc]])
   colnames_df <- colnames(df2)
-  if (!is.null(cols)) {
-    candidate_names <- character(0)
-    cols_q <- rlang::enquo(cols)
-    if (!rlang::quo_is_null(cols_q)) {
-      sel <- try(tidyselect::eval_select(rlang::get_expr(cols_q), data = df2), silent = TRUE)
-      if (!inherits(sel, "try-error") && length(sel) > 0) {
-        candidate_names <- names(sel)
-      }
-    }
-    if (is.character(cols)) {
-      candidate_names <- unique(c(candidate_names, intersect(cols, names(df2))))
-    }
-    candidate_names <- intersect(names(df2), candidate_names)
-    na_cols <- candidate_names[vapply(df2[candidate_names], needs_imputation, logical(1))]
+
+  if (is.null(cols)) {
+    cols <- names(df2)[vapply(df2, needs_imputation, logical(1))]
   } else {
-    na_cols <- names(df2)[vapply(df2, needs_imputation, logical(1))]
+    cols <- intersect(cols, names(df2))
+    cols <- cols[vapply(df2[cols], needs_imputation, logical(1))]
   }
 
-  if (!length(na_cols)) {
-    if (isTRUE(verbose)) message("No missing values detected in selected columns.")
-    return(df)
-  }
-  for (y in na_cols) {
+  predictors_all <- setdiff(colnames_df, exclude_predictors %||% character(0))
+  if (is.null(train_rows)) train_rows <- seq_len(nrow(df2))
+
+  for (y in cols) {
+    if (is.function(progress_hook)) progress_hook()
+
     y_vec <- df2[[y]]
-    if (all(missing_mask(y_vec))) {
-      if (isTRUE(verbose)) message(sprintf("Skipping '%s' (all values are missing).", y))
-      next
-    }
-    if (length(unique(stats::na.omit(y_vec))) < 2) {
-      if (isTRUE(verbose)) message(sprintf("Skipping '%s' (insufficient class/variance).", y))
-      next
-    }
-    x <- setdiff(colnames_df, y)
+    if (all(missing_mask(y_vec))) next
+    if (length(unique(stats::na.omit(y_vec))) < 2) next
+
+    x <- setdiff(predictors_all, y)
     obs <- which(!missing_mask(y_vec))
+    obs <- intersect(obs, train_rows)
     if (!length(obs)) next
+
     train_df <- df2[obs, , drop = FALSE]
-    train_hf <- NULL
-    train_conv <- utils::capture.output({
-      train_hf <- h2o::as.h2o(train_df)
-    }, type = "output")
-    if (length(train_conv) > 0) {
-      for (ln in train_conv) message(ln)
-    }
+
+    train_hf <- h2o::as.h2o(train_df)
     params <- list(
-      x = x,
-      y = y,
-      training_frame = train_hf,
-      ntrees = ntrees,
-      max_depth = max_depth,
-      min_rows = min_rows,
-      sample_rate = sample_rate,
-      col_sample_rate_per_tree = col_sample_rate_per_tree,
-      balance_classes = balance_classes,
-      seed = seed,
-      stopping_rounds = 0
+      x = x, y = y, training_frame = train_hf,
+      ntrees = ntrees, max_depth = max_depth, min_rows = min_rows,
+      sample_rate = sample_rate, col_sample_rate_per_tree = col_sample_rate_per_tree,
+      balance_classes = balance_classes, seed = seed, stopping_rounds = 0
     )
-    if (isTRUE(verbose)) {
-      msg_type <- if (is.factor(df2[[y]]) || is.logical(df2[[y]])) "classification" else "regression"
-      message(sprintf("Imputing '%s' with DRF (%s)…", y, msg_type))
-    }
-    model <- NULL
-    tmp_out <- utils::capture.output({
-      model <- do.call(h2o::h2o.randomForest, params)
-    }, type = "output")
-    if (length(tmp_out) > 0) {
-      for (ln in tmp_out) message(ln)
-    }
-    full_pred_hf <- NULL
-    pred_conv <- utils::capture.output({
-      full_pred_hf <- h2o::as.h2o(df2[, x, drop = FALSE])
-    }, type = "output")
-    if (length(pred_conv) > 0) {
-      for (ln in pred_conv) message(ln)
-    }
-    pred_out <- NULL
-    tmp_pred <- utils::capture.output({
-      pred_out <- h2o::h2o.predict(model, full_pred_hf)
-    }, type = "output")
-    if (length(tmp_pred) > 0) {
-      for (ln in tmp_pred) message(ln)
-    }
+    model <- do.call(h2o::h2o.randomForest, params)
+
+    full_pred_hf <- h2o::as.h2o(df2[, x, drop = FALSE])
+    pred_out <- h2o::h2o.predict(model, full_pred_hf)
     pred_vec <- as.vector(pred_out[, "predict"])
+
     if (is.factor(df2[[y]])) {
-      cur_levels <- levels(df2[[y]])
-      new_levels <- unique(as.character(pred_vec))
+      cur_levels <- levels(df2[[y]]); new_levels <- unique(as.character(pred_vec))
       df2[[y]] <- factor(df2[[y]], levels = union(cur_levels, new_levels))
-      miss <- missing_mask(df2[[y]])
-      df2[[y]][miss] <- as.character(pred_vec[miss])
+      miss <- missing_mask(df2[[y]]); df2[[y]][miss] <- as.character(pred_vec[miss])
     } else {
-      vals <- as.numeric(pred_vec)
-      miss <- missing_mask(df2[[y]])
-      if (!is.null(round_digits) && !is.na(round_digits)) {
-        vals[miss] <- round(vals[miss], digits = as.integer(round_digits))
-      }
-      df2[[y]][miss] <- vals[miss]
-    }
-    if (requireNamespace("cli", quietly = TRUE)) {
-      try(cli::cli_progress_update(force = TRUE), silent = TRUE)
+      vals <- suppressWarnings(as.numeric(pred_vec))
+      miss <- missing_mask(df2[[y]]); df2[[y]][miss] <- vals[miss]
     }
   }
+
   out <- as.data.frame(df2, stringsAsFactors = FALSE)
   for (nm in names(out)) {
     cls <- classes[[nm]]
-    if (cls %in% c("integer", "numeric")) {
-      out[[nm]] <- as.numeric(out[[nm]])
-      if (identical(cls, "integer") && all(!is.na(out[[nm]]))) {
-        if (all(abs(out[[nm]] - round(out[[nm]])) < .Machine$double.eps^0.5)) {
-          out[[nm]] <- as.integer(round(out[[nm]]))
-        }
-      }
-    } else if (cls %in% c("factor", "ordered")) {
-      out[[nm]] <- as.factor(out[[nm]])
-      if (identical(cls, "ordered")) {
-        out[[nm]] <- factor(out[[nm]], ordered = TRUE)
-      }
+    if (cls %in% c("integer", "numeric")) out[[nm]] <- as.numeric(out[[nm]])
+    else if (cls %in% c("factor", "ordered")) {
+      out[[nm]] <- as.factor(out[[nm]]); if (identical(cls, "ordered")) out[[nm]] <- factor(out[[nm]], ordered = TRUE)
     } else if (identical(cls, "logical")) {
-      if (is.factor(out[[nm]])) {
-        lv <- levels(out[[nm]])
-        if (length(lv) == 2) {
-          out[[nm]] <- out[[nm]] == lv[2]
-        }
-      } else {
-        out[[nm]] <- as.logical(out[[nm]])
-      }
+      if (is.factor(out[[nm]])) { lv <- levels(out[[nm]]); if (length(lv) == 2) out[[nm]] <- out[[nm]] == lv[2] }
+      else out[[nm]] <- as.logical(out[[nm]])
     } else if (identical(cls, "character")) {
       out[[nm]] <- as.character(out[[nm]])
     }
   }
+
+  if (!is.null(round_digits) && !is.na(round_digits))
+    out <- round_imputed_numerics(df, out, digits = round_digits)
+
   out
 }

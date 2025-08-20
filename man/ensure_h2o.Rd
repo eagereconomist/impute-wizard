@@ -2,22 +2,27 @@
 % Please edit documentation in R/h2o_utils.R
 \name{ensure_h2o}
 \alias{ensure_h2o}
-\title{Ensure H2O Cluster}
+\title{Ensure an H2O cluster is running}
 \usage{
 ensure_h2o(nthreads = -1L, max_mem_size = NULL, port = "auto", quiet = TRUE)
 }
 \arguments{
-\item{nthreads}{Number of threads to use (default -1, all available)}
+\item{nthreads}{Integer; number of threads (-1 for all).}
 
-\item{max_mem_size}{Maximum memory size for the H2O cluster (e.g. "32G")}
+\item{max_mem_size}{Character like "32G" for max memory.}
 
-\item{port}{Port on which to launch the H2O cluster ("auto" to auto-select)}
+\item{port}{Integer port or "auto".}
 
-\item{quiet}{Whether to suppress startup messages}
+\item{quiet}{Logical; suppress startup messages.}
 }
 \value{
-An invisible H2O connection object or TRUE if already connected.
+An H2O connection object (invisibly).
 }
 \description{
-\n
+Returns an existing H2O connection if available, otherwise starts a new H2O
+cluster using the provided settings. Tries a small set of ports when
+`port = "auto"`.
+}
+\seealso{
+h2o::h2o.init
 }

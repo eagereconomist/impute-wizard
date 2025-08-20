@@ -1,5 +1,11 @@
-#' @param expr An expression to evaluate quietly.
-#' @return The value of the expression.
+#' Evaluate an expression with stdout/stderr silenced
+#'
+#' Captures console output and messages while evaluating an expression, then
+#' restores sinks and returns the expression result.
+#' @param expr An expression to evaluate.
+#' @return The value of `expr`.
+#' @keywords internal
+#' @noRd
 quiet_run <- function(expr) {
   expr <- substitute(expr)
   out_path <- tempfile()
@@ -25,20 +31,18 @@ quiet_run <- function(expr) {
   res
 }
 
-#' @title Ensure H2O Cluster
-#' @name ensure_h2o
-#' @description \n
-# Ensure that an H2O connection is running.  If a connection already exists,
-# it is returned.  Otherwise a new H2O cluster is initialised using the
-# provided parameters.  The `quiet` flag controls whether progress
-# messages from H2O startup are displayed.  This helper is used by
-# higher-level functions to manage the H2O lifecycle.
-#' @param nthreads Number of threads to use (default -1, all available)
-#' @param max_mem_size Maximum memory size for the H2O cluster (e.g. "32G")
-#' @param port Port on which to launch the H2O cluster ("auto" to auto-select)
-#' @param quiet Whether to suppress startup messages
-#' @return An invisible H2O connection object or TRUE if already connected.
+#' Ensure an H2O cluster is running
+#'
+#' Returns an existing H2O connection if available, otherwise starts a new H2O
+#' cluster using the provided settings. Tries a small set of ports when
+#' `port = "auto"`.
+#' @param nthreads Integer; number of threads (-1 for all).
+#' @param max_mem_size Character like "32G" for max memory.
+#' @param port Integer port or "auto".
+#' @param quiet Logical; suppress startup messages.
+#' @return An H2O connection object (invisibly).
 #' @export
+#' @seealso h2o::h2o.init
 ensure_h2o <- function(nthreads = -1L,
                        max_mem_size = NULL,
                        port = "auto",
@@ -47,7 +51,6 @@ ensure_h2o <- function(nthreads = -1L,
     stop("Package 'h2o' is required. Install it first.", call. = FALSE)
   }
   existing <- try(h2o::h2o.getConnection(), silent = TRUE)
-  # If a connection already exists, reuse it.
   if (inherits(existing, "H2OConnection")) {
     return(invisible(existing))
   }

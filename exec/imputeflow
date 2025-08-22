@@ -6,6 +6,8 @@ suppressPackageStartupMessages({
   library(imputeflow)
 })
 
+options(cli.progress_show_after = 0, cli.progress_clear = FALSE)
+
 argv <- commandArgs(trailingOnly = TRUE)
 
 if (length(argv) == 0 || argv[1] %in% c("-h", "--help")) {
@@ -141,7 +143,22 @@ redirect_stop <- function(state) {
   }
 }
 
-#' Run the mean CLI subcommand
+# small helper to print the same arrowed per-column line as DRF
+.per_col_line <- function(colname) {
+  sym <- cli::symbol
+  cat(
+    paste0(
+      cli::col_silver(sym$arrow_right, " "),
+      cli::col_silver("imputing column : "),
+      cli::col_cyan(colname),
+      "\n"
+    ),
+    file = stderr()
+  )
+  flush.console()
+}
+
+#' Run the mean CLI subcommand (with progress bar)
 #' @keywords internal
 #' @noRd
 run_mean <- function() {
@@ -173,17 +190,52 @@ run_mean <- function() {
   if (mode == "fit") {
     if (is.null(opt$`save-spec`)) cli::cli_abort("--save-spec is required in 'fit' mode.")
     spec <- imputeflow::fit_mean_spec(df, cols = eligible, train_rows = train_rows)
+    # visual-only progress for fitting
+    if (length(spec$cols)) {
+      bar_id <- cli::cli_progress_bar("Fitting mean spec", total = length(spec$cols))
+      for (nm in spec$cols) cli::cli_progress_update(id = bar_id)
+      cli::cli_progress_done(id = bar_id)
+    }
     saveRDS(spec, opt$`save-spec`)
     cli::cli_alert_success("Saved spec to {opt$`save-spec`}.")
     invisible(NULL)
   } else if (mode == "apply") {
     if (is.null(opt$`load-spec`)) cli::cli_abort("--load-spec is required in 'apply' mode.")
     spec <- readRDS(opt$`load-spec`)
-    out <- imputeflow::apply_mean_spec(df, spec, round_digits = opt$round)
+    out_full <- imputeflow::apply_mean_spec(df, spec, round_digits = opt$round)
+
+    if (length(spec$cols)) {
+      bar_id <- cli::cli_progress_bar("Imputing (MEAN)", total = length(spec$cols))
+      out <- df
+      for (nm in spec$cols) {
+        if (!nm %in% names(out)) { cli::cli_progress_update(id = bar_id); next }
+        .per_col_line(nm)
+        out[[nm]] <- out_full[[nm]]
+        cli::cli_progress_update(id = bar_id)
+      }
+      cli::cli_progress_done(id = bar_id)
+    } else {
+      out <- out_full
+    }
+
     write_stdout_csv(out, verbose = !opt$quiet)
   } else {
     spec <- imputeflow::fit_mean_spec(df, cols = eligible, train_rows = train_rows)
-    out  <- imputeflow::apply_mean_spec(df, spec, round_digits = opt$round)
+    out_full <- imputeflow::apply_mean_spec(df, spec, round_digits = opt$round)
+
+    if (length(spec$cols)) {
+      bar_id <- cli::cli_progress_bar("Imputing (MEAN)", total = length(spec$cols))
+      out <- df
+      for (nm in spec$cols) {
+        .per_col_line(nm)
+        out[[nm]] <- out_full[[nm]]
+        cli::cli_progress_update(id = bar_id)
+      }
+      cli::cli_progress_done(id = bar_id)
+    } else {
+      out <- out_full
+    }
+
     if (!is.null(opt$`save-spec`)) {
       saveRDS(spec, opt$`save-spec`)
       cli::cli_alert_info("Saved spec to {opt$`save-spec`}.")
@@ -195,7 +247,7 @@ run_mean <- function() {
   cli::cli_alert_success("Completed mean in {dt} seconds.")
 }
 
-#' Run the median CLI subcommand
+#' Run the median CLI subcommand (with progress bar)
 #' @keywords internal
 #' @noRd
 run_median <- function() {
@@ -227,16 +279,50 @@ run_median <- function() {
   if (mode == "fit") {
     if (is.null(opt$`save-spec`)) cli::cli_abort("--save-spec is required in 'fit' mode.")
     spec <- imputeflow::fit_median_spec(df, cols = eligible, train_rows = train_rows)
+    if (length(spec$cols)) {
+      bar_id <- cli::cli_progress_bar("Fitting median spec", total = length(spec$cols))
+      for (nm in spec$cols) cli::cli_progress_update(id = bar_id)
+      cli::cli_progress_done(id = bar_id)
+    }
     saveRDS(spec, opt$`save-spec`)
     cli::cli_alert_success("Saved spec to {opt$`save-spec`}.")
   } else if (mode == "apply") {
     if (is.null(opt$`load-spec`)) cli::cli_abort("--load-spec is required in 'apply' mode.")
     spec <- readRDS(opt$`load-spec`)
-    out <- imputeflow::apply_median_spec(df, spec, round_digits = opt$round)
+    out_full <- imputeflow::apply_median_spec(df, spec, round_digits = opt$round)
+
+    if (length(spec$cols)) {
+      bar_id <- cli::cli_progress_bar("Imputing (MEDIAN)", total = length(spec$cols))
+      out <- df
+      for (nm in spec$cols) {
+        if (!nm %in% names(out)) { cli::cli_progress_update(id = bar_id); next }
+        .per_col_line(nm)
+        out[[nm]] <- out_full[[nm]]
+        cli::cli_progress_update(id = bar_id)
+      }
+      cli::cli_progress_done(id = bar_id)
+    } else {
+      out <- out_full
+    }
+
     write_stdout_csv(out, verbose = !opt$quiet)
   } else {
     spec <- imputeflow::fit_median_spec(df, cols = eligible, train_rows = train_rows)
-    out  <- imputeflow::apply_median_spec(df, spec, round_digits = opt$round)
+    out_full <- imputeflow::apply_median_spec(df, spec, round_digits = opt$round)
+
+    if (length(spec$cols)) {
+      bar_id <- cli::cli_progress_bar("Imputing (MEDIAN)", total = length(spec$cols))
+      out <- df
+      for (nm in spec$cols) {
+        .per_col_line(nm)
+        out[[nm]] <- out_full[[nm]]
+        cli::cli_progress_update(id = bar_id)
+      }
+      cli::cli_progress_done(id = bar_id)
+    } else {
+      out <- out_full
+    }
+
     if (!is.null(opt$`save-spec`)) {
       saveRDS(spec, opt$`save-spec`)
       cli::cli_alert_info("Saved spec to {opt$`save-spec`}.")
@@ -248,60 +334,7 @@ run_median <- function() {
   cli::cli_alert_success("Completed median in {dt} seconds.")
 }
 
-#' Run the mode CLI subcommand
-#' @keywords internal
-#' @noRd
-run_mode <- function() {
-  option_list <- c(common_fit_apply_opts())
-  opt <- parse_args(OptionParser(option_list = option_list), args = args)
-
-  df <- read_stdin_csv(verbose = !opt$quiet)
-  cli::cli_h1("imputeflow")
-  cli::cli_alert_info("Method  : MODE")
-  cli::cli_alert_info("Mode    : {opt$mode} | Training fraction (fallback): {opt$`train-frac`}")
-
-  cols <- parse_cols(opt$cols)
-  .print_cols_banner(df, cols)
-
-  train_rows <- imputeflow:::resolve_train_rows(
-    df, opt$`train-rows`, opt$`train-mask`, opt$`mask-col`,
-    train_frac = opt$`train-frac`, seed = opt$seed
-  )
-
-  target_cols <- if (!is.null(cols)) cols else names(df)
-  eligible <- target_cols[vapply(
-    target_cols,
-    function(nm) imputeflow:::needs_imputation(df[[nm]]),
-    logical(1)
-  )]
-  mode  <- match.arg(tolower(opt$mode), c("fit", "apply", "fit-apply"))
-
-  t0 <- Sys.time()
-  if (mode == "fit") {
-    if (is.null(opt$`save-spec`)) cli::cli_abort("--save-spec is required in 'fit' mode.")
-    spec <- imputeflow::fit_mode_spec(df, cols = eligible, train_rows = train_rows)
-    saveRDS(spec, opt$`save-spec`)
-    cli::cli_alert_success("Saved spec to {opt$`save-spec`}.")
-  } else if (mode == "apply") {
-    if (is.null(opt$`load-spec`)) cli::cli_abort("--load-spec is required in 'apply' mode.")
-    spec <- readRDS(opt$`load-spec`)
-    out <- imputeflow::apply_mode_spec(df, spec, round_digits = opt$round)
-    write_stdout_csv(out, verbose = !opt$quiet)
-  } else {
-    spec <- imputeflow::fit_mode_spec(df, cols = eligible, train_rows = train_rows)
-    out  <- imputeflow::apply_mode_spec(df, spec, round_digits = opt$round)
-    if (!is.null(opt$`save-spec`)) {
-      saveRDS(spec, opt$`save-spec`)
-      cli::cli_alert_info("Saved spec to {opt$`save-spec`}.")
-    }
-    write_stdout_csv(out, verbose = !opt$quiet)
-  }
-
-  dt <- round(difftime(Sys.time(), t0, units = "secs"), 2)
-  cli::cli_alert_success("Completed mode in {dt} seconds.")
-}
-
-#' Run the knn CLI subcommand
+#' Run the knn CLI subcommand (with progress bar + themed colors)
 #' @keywords internal
 #' @noRd
 run_knn <- function() {
@@ -311,14 +344,70 @@ run_knn <- function() {
   )
   opt <- parse_args(OptionParser(option_list = option_list), args = args)
 
+  # Make bars show immediately; render to stderr
+  old_opts <- options(cli.progress_show_after = 0, cli.progress_clear = FALSE)
+  on.exit(options(old_opts), add = TRUE)
+  try(options(cli.progress_output = "stderr"), silent = TRUE)
+
+  # ── Theme (vivid|minimal) + GREEN progress bar ────────────────────────────
+  style <- tolower(Sys.getenv("IMPUTEFLOW_STYLE", "vivid"))
+  theme <- switch(
+    style,
+    minimal = list(
+      ".impute .label"   = list(),
+      ".impute .val"     = list("font-weight" = "bold"),
+      ".impute .method"  = list(bold = TRUE),
+      ".impute .mode"    = list(bold = TRUE, color = "blue"),
+      ".impute .columns" = list(bold = TRUE),
+      ".impute .col"     = list(bold = TRUE),
+      ".impute .num"     = list(color = "blue"),
+      ".impute .mem"     = list(color = "magenta"),
+      # progress bar styling (green)
+      ".progress-bar .bar"          = list(color = "green"),
+      ".progress-bar .bar-complete" = list(color = "green"),
+      ".progress-bar .current"      = list(color = "green")
+    ),
+    # vivid (default)
+    list(
+      ".impute h1"       = list(color = "#268BD2"),   # blue header
+      ".impute .label"   = list(color = "#839496"),   # base0 (soft gray)
+      ".impute .val"     = list(color = "#FDF6E3", "font-weight" = "bold"),
+      ".impute .method"  = list(color = "#CB4B16", "font-weight" = "bold"), # orange
+      ".impute .ntrees"  = list(color = "#B58900", "font-weight" = "bold"), # yellow
+      ".impute .mdepth"  = list(color = "#B58900", "font-weight" = "bold"),
+      ".impute .srate"   = list(color = "#B58900", "font-weight" = "bold"),
+      ".impute .treer"   = list(color = "#B58900", "font-weight" = "bold"),
+      ".impute .mode"    = list(color = "#2AA198", "font-weight" = "bold"), # cyan
+      ".impute .columns" = list(color = "#EEE8D5"),                         # light bg
+      ".impute .col"     = list(color = "#268BD2", "font-weight" = "bold"), # blue
+      ".impute .num"     = list(color = "#859900", "font-weight" = "bold"), # green
+      ".impute .mem"     = list(color = "#D33682", "font-weight" = "bold"), # magenta
+      ".impute .ok"      = list(color = "#859900"),  # green ok
+      ".impute .warn"    = list(color = "#B58900"),  # yellow warn
+      ".progress-bar .bar"          = list(color = "#859900"),
+      ".progress-bar .bar-complete" = list(color = "#859900"),
+      ".progress-bar .current"      = list(color = "#859900")
+    )
+  )
+  div_id <- cli::cli_div(class = "impute", theme = theme)
+  on.exit(cli::cli_end(div_id), add = TRUE)
+
+  # Header
+  .line <- if (isTRUE(l10n_info()[["UTF-8"]])) "─" else "-"
+  hdr <- cli::rule(left = cli::col_cyan(cli::style_bold("imputeflow")), line = .line, col = "cyan")
+  cat(hdr, "\n", file = stderr(), sep = "")
+  cli::cli_alert_info("Method  : {.method kNN}")
+  cli::cli_alert_info("Mode    : {.mode {opt$mode}} | Neighbors: {.num {opt$neighbors}} | Training fraction (fallback): {.num {opt$`train-frac`}}")
+
   df <- read_stdin_csv(verbose = !opt$quiet)
-  cli::cli_h1("imputeflow")
-  cli::cli_alert_info("Method  : kNN")
-  cli::cli_alert_info("Mode    : {opt$mode} | Neighbors: {opt$neighbors} | Training fraction (fallback): {opt$`train-frac`}")
 
   cols <- parse_cols(opt$cols)
   excl <- parse_cols(opt$`exclude-predictors`)
-  .print_cols_banner(df, cols)
+
+  # Themed columns banner
+  shown <- if (!is.null(cols)) cols else names(df)
+  short <- if (length(shown) > 3L) paste0(paste(shown[1:3], collapse = ", "), ", ...") else paste(shown, collapse = ", ")
+  cli::cli_alert_info("Columns : {.columns {short}} ({.num {length(shown)}} total)")
 
   train_rows <- imputeflow:::resolve_train_rows(
     df, opt$`train-rows`, opt$`train-mask`, opt$`mask-col`,
@@ -331,29 +420,55 @@ run_knn <- function() {
   mode  <- match.arg(tolower(opt$mode), c("fit", "apply", "fit-apply"))
 
   t0 <- Sys.time()
+
   if (mode == "fit") {
     if (is.null(opt$`save-spec`)) cli::cli_abort("--save-spec is required in 'fit' mode.")
+    pb <- cli::cli_progress_bar("Fitting (kNN)", total = 2, name = "kNN")
+
     spec <- imputeflow::fit_knn_spec(
       df, cols = eligible, neighbors = opt$neighbors, train_rows = train_rows,
       exclude_predictors = excl
     )
+    cli::cli_progress_update(id = pb)
+
     saveRDS(spec, opt$`save-spec`)
+    cli::cli_progress_update(id = pb)
+    cli::cli_progress_done(id = pb)
     cli::cli_alert_success("Saved spec to {opt$`save-spec`}.")
+    invisible(NULL)
+
   } else if (mode == "apply") {
     if (is.null(opt$`load-spec`)) cli::cli_abort("--load-spec is required in 'apply' mode.")
-    spec <- readRDS(opt$`load-spec`)
-    out <- imputeflow::apply_knn_spec(df, spec, round_digits = opt$round)
-    write_stdout_csv(out, verbose = !opt$quiet)
-  } else {
-    spec <- imputeflow::fit_knn_spec(
-      df, cols = eligible, neighbors = opt$neighbors, train_rows = train_rows,
-      exclude_predictors = excl
-    )
-    out  <- imputeflow::apply_knn_spec(df, spec, round_digits = opt$round)
-    if (!is.null(opt$`save-spec`)) {
-      saveRDS(spec, opt$`save-spec`)
-      cli::cli_alert_info("Saved spec to {opt$`save-spec`}.")
+    pb <- cli::cli_progress_bar("Imputing (kNN)", total = 3, name = "kNN")
+
+    spec <- readRDS(opt$`load-spec`);                     cli::cli_progress_update(id = pb)
+    out  <- imputeflow::apply_knn_spec(df, spec, round_digits = opt$round); cli::cli_progress_update(id = pb)
+    write_stdout_csv(out, verbose = !opt$quiet);          cli::cli_progress_update(id = pb)
+    cli::cli_progress_done(id = pb)
+
+  } else { # fit-apply (tick once per column; no per-column messages)
+    n_cols <- length(eligible)
+    pb <- cli::cli_progress_bar("Imputing (kNN)", total = max(n_cols, 1L), name = "kNN")
+
+    out <- df
+    if (n_cols == 0L) {
+      cli::cli_progress_update(id = pb)
+      cli::cli_progress_done(id = pb)
+      write_stdout_csv(out, verbose = !opt$quiet)
+      return(invisible(NULL))
     }
+
+    for (nm in eligible) {
+      spec_one <- imputeflow::fit_knn_spec(
+        out, cols = nm, neighbors = opt$neighbors, train_rows = train_rows,
+        exclude_predictors = excl
+      )
+      out_one <- imputeflow::apply_knn_spec(out, spec_one, round_digits = opt$round)
+      if (nm %in% names(out_one)) out[[nm]] <- out_one[[nm]]
+      cli::cli_progress_update(id = pb)
+    }
+
+    cli::cli_progress_done(id = pb)
     write_stdout_csv(out, verbose = !opt$quiet)
   }
 
@@ -361,14 +476,20 @@ run_knn <- function() {
   cli::cli_alert_success("Completed kNN in {dt} seconds.")
 }
 
-#' Run the drf CLI subcommand (styled)
-#'
-#' Streams H2O chatter to stderr; prints colored per-column lines like
-#' "→ imputing column : demog_age" to stderr; writes imputed CSV to stdout.
-#' Theme can be changed with env var IMPUTEFLOW_STYLE = vivid|minimal.
+
+#' Run the drf CLI subcommand (styled theme + single GREEN bar + timer)
 #' @keywords internal
 #' @noRd
 run_drf <- function() {
+  # Collect argv and strip any leading subcommand tokens like "drf" or "impute drf"
+  get_argv <- function() {
+    if (exists("args", inherits = FALSE)) args else commandArgs(trailingOnly = TRUE)
+  }
+  argv <- get_argv()
+  while (length(argv) && argv[1L] %in% c("impute", "drf")) {
+    argv <- argv[-1L]
+  }
+
   option_list <- c(
     common_fit_apply_opts(),
     make_option(c("--ntrees"), type = "integer", default = 50),
@@ -379,11 +500,13 @@ run_drf <- function() {
     make_option(c("--balance-classes"), action = "store_true", default = FALSE),
     make_option(c("--h2o-threads"), type = "integer", default = NA_integer_),
     make_option(c("--h2o-mem"), type = "character", default = NULL),
-    make_option(c("--fallback"), type = "character", default = "none",
-                help = "Fallback if DRF doesn't reduce missingness: none|mean|median|mode"),
+    make_option(
+      c("--fallback"), type = "character", default = "none",
+      help = "Fallback if DRF doesn't reduce missingness: none|mean|median|mode"
+    ),
     make_option(c("--h2o-shutdown"), action = "store_true", default = FALSE)
   )
-  opt <- parse_args(OptionParser(option_list = option_list), args = args)
+  opt <- parse_args(OptionParser(option_list = option_list), args = argv)
 
   if (!is.null(opt$`save-spec`) || !is.null(opt$`load-spec`) || tolower(opt$mode) != "fit-apply") {
     cli::cli_abort(c(
@@ -392,6 +515,18 @@ run_drf <- function() {
     ))
   }
 
+  # Progress: show immediately on stderr; keep stdout clean; silence readr bars
+  old_opts <- options(
+    cli.progress_show_after = 0,
+    cli.progress_clear      = FALSE,
+    cli.progress_output     = "stderr",
+    cli.num_colors          = 256,
+    crayon.enabled          = TRUE,
+    readr.show_progress     = FALSE
+  )
+  on.exit(options(old_opts), add = TRUE)
+
+  # ── Theme (vivid|minimal) + GREEN progress bar ────────────────────────────
   style <- tolower(Sys.getenv("IMPUTEFLOW_STYLE", "vivid"))
   theme <- switch(
     style,
@@ -403,138 +538,159 @@ run_drf <- function() {
       ".impute .columns" = list(bold = TRUE),
       ".impute .col"     = list(bold = TRUE),
       ".impute .num"     = list(color = "blue"),
-      ".impute .mem"     = list(color = "magenta")
+      ".impute .mem"     = list(color = "magenta"),
+      ".progress-bar .bar"          = list(color = "green"),
+      ".progress-bar .bar-complete" = list(color = "green"),
+      ".progress-bar .current"      = list(color = "green")
     ),
     list(
-      ".impute h1"       = list(color = "cyan"),
-      ".impute .label"   = list(color = "grey70"),
-      ".impute .val"     = list(color = "orange",  "font-weight" = "bold"),
-      ".impute .method"  = list(color = "orange",  "font-weight" = "bold"),
-      ".impute .mode"    = list(color = "purple",  "font-weight" = "bold"),
-      ".impute .columns" = list(color = "white"),
-      ".impute .col"     = list(color = "cyan",    "font-weight" = "bold"),
-      ".impute .num"     = list(color = "blue",    "font-weight" = "bold"),
-      ".impute .mem"     = list(color = "magenta", "font-weight" = "bold"),
-      ".impute .ok"      = list(color = "green"),
-      ".impute .warn"    = list(color = "yellow")
+      ".impute h1"       = list(color = "#6A5ACD", "font-weight" = "bold"),
+      ".impute .label"   = list(color = "#20B2AA", "font-weight" = "bold"),
+      ".impute .val"     = list(color = "#F8F8FF", "font-weight" = "bold"),
+      ".impute .method"  = list(color = "#FF69B4", "font-weight" = "bold"),
+      ".impute .round"   = list(color = "#87CEEB", "font-weight" = "bold"),
+      ".impute .ntrees"  = list(color = "#87CEEB", "font-weight" = "bold"),
+      ".impute .mdepth"  = list(color = "#87CEEB", "font-weight" = "bold"),
+      ".impute .srate"   = list(color = "#87CEEB", "font-weight" = "bold"),
+      ".impute .treer"   = list(color = "#87CEEB", "font-weight" = "bold"),
+      ".impute .mode"    = list(color = "#7FFFD4", "font-weight" = "bold"),
+      ".impute .columns" = list(color = "#F8F8FF"),
+      ".impute .col"     = list(color = "#FFD700", "font-weight" = "bold"),
+      ".impute .num"     = list(color = "#20B2AA", "font-weight" = "bold"),
+      ".impute .mem"     = list(color = "#9370DB", "font-weight" = "bold"),
+      ".impute .ok"      = list(color = "#32CD32"),
+      ".impute .warn"    = list(color = "#FFA07A"),
+      ".progress-bar .bar"          = list(color = "#32CD32"),
+      ".progress-bar .bar-complete" = list(color = "#32CD32"),
+      ".progress-bar .current"      = list(color = "#32CD32")
     )
   )
   div_id <- cli::cli_div(class = "impute", theme = theme)
   on.exit(cli::cli_end(div_id), add = TRUE)
 
-  df <- read_stdin_csv(verbose = !opt$quiet)
+  # Guard: --h2o-mem must include a G suffix (e.g. 8G). If provided and invalid, abort early.
+  if (!is.null(opt$`h2o-mem`) && nzchar(opt$`h2o-mem`)) {
+    mem_str <- trimws(opt$`h2o-mem`)
+    if (!grepl("^[0-9]+\\s*[Gg]$", mem_str)) {
+      cli::cli_abort(c(
+        "x Invalid {.code --h2o-mem} value: {.val {mem_str}}.",
+        "i Please specify memory with a {.emph 'G'} suffix, e.g. {.code 8G}, {.code 16G}, {.code 32G}."
+      ))
+    }
+    opt$`h2o-mem` <- gsub("\\s+", "", toupper(mem_str)) # normalize
+  }
+
+  # Round message (no normalization here — use the parsed integer/NA as-is)
+  round_msg <- if (isTRUE(is.na(opt$round))) {
+    "None"
+  } else if (opt$round == 0L) {
+    "0 decimals"
+  } else if (opt$round == 1L) {
+    "1 decimal place"
+  } else {
+    sprintf("%d decimal places", opt$round)
+  }
+
+  # Header
   .line <- if (isTRUE(l10n_info()[["UTF-8"]])) "─" else "-"
   hdr <- cli::rule(left = cli::col_cyan(cli::style_bold("imputeflow")), line = .line, col = "cyan")
   cat(hdr, "\n", file = stderr(), sep = "")
+  cli::cli_alert_info("Method               : {.method Distributed Random Forest (DRF)}")
+  cli::cli_alert_info("Round                : {.round {round_msg}}")
+  cli::cli_alert_info("Number of Trees      : {.ntrees {opt$ntrees}}")
+  cli::cli_alert_info("Max Depth            : {.mdepth {opt$`max-depth`}}")
+  cli::cli_alert_info("Sample Rate          : {.srate {opt$`sample-rate`}}")
+  cli::cli_alert_info("Sample Rate Per Tree : {.treer {opt$`col-sample-rate-per-tree`}}")
+  cli::cli_alert_info("Mode                 : {.mode fit-apply}")
+  cli::cli_alert_info("H2O Memory           : {.mem {if (is.null(opt$`h2o-mem`) || !nzchar(opt$`h2o-mem`)) 'auto' else opt$`h2o-mem`}}")
+  cli::cli_alert_info("Requested Threads    : {.num {if (is.na(opt$`h2o-threads`)) 'auto' else opt$`h2o-threads`}}")
 
-  mem_str <- if (is.null(opt$`h2o-mem`) || !nzchar(opt$`h2o-mem`)) "auto" else opt$`h2o-mem`
-
-  cli::cli_alert_info("Method       : {.method DRF}")
-  cli::cli_alert_info("Mode         : {.mode fit-apply}")
-  cli::cli_alert_info("Training Set : {.num {opt$`train-frac`}}")
-  cli::cli_alert_info("H2O Memory   : {.mem {mem_str}}")
-
+  # Inputs
+  df   <- read_stdin_csv(verbose = !opt$quiet)
   cols <- parse_cols(opt$cols)
   excl <- parse_cols(opt$`exclude-predictors`)
-  max_cols <- 3L
-  shown <- if (!is.null(cols)) cols else names(df)
-  short <- if (length(shown) > max_cols)
-    paste0(paste(shown[1:max_cols], collapse = ", "), ", ...")
-  else
-    paste(shown, collapse = ", ")
-  cli::cli_alert_info("Columns      : {.columns {short}} ({.num {length(shown)}} total)")
 
+  shown <- if (!is.null(cols)) cols else names(df)
+  short <- if (length(shown) > 3L) paste0(paste(shown[1:3], collapse = ", "), ", ...") else paste(shown, collapse = ", ")
+  cli::cli_alert_info("Columns              : {.columns {short}} ({.num {length(shown)}} total)")
+
+  # Resolve train rows and show friendly split (train % from --train-frac when provided)
   train_rows <- imputeflow:::resolve_train_rows(
     df, opt$`train-rows`, opt$`train-mask`, opt$`mask-col`,
     train_frac = opt$`train-frac`, seed = opt$seed
   )
+  n_total  <- nrow(df)
+  n_train  <- length(train_rows)
+
+  if (is.null(opt$`train-rows`) && is.null(opt$`train-mask`) &&
+      is.numeric(opt$`train-frac`) && is.finite(opt$`train-frac`) &&
+      opt$`train-frac` > 0 && opt$`train-frac` <= 1) {
+    pct_train <- round(100 * opt$`train-frac`, 1)
+  } else {
+    pct_train <- round(100 * (n_train / max(n_total, 1L)), 1)
+  }
+  n_test <- max(n_total - n_train, 0L)
+  pct_test <- round(100 - pct_train, 1)
+
+  cli::cli_alert_info("Training rows        : {.num {n_train}} / {.num {n_total}} ({.num {pct_train}}%)")
+  cli::cli_alert_info("Holdout (test)       : {.num {n_test}} / {.num {n_total}} ({.num {pct_test}}%)")
 
   target_cols <- if (!is.null(cols)) cols else names(df)
-  eligible <- target_cols[vapply(
-    target_cols,
-    function(nm) imputeflow:::needs_imputation(df[[nm]]),
-    logical(1)
-  )]
+  eligible <- target_cols[vapply(target_cols, function(nm) imputeflow:::needs_imputation(df[[nm]]), logical(1))]
 
-  t0 <- Sys.time()
-  before_na <- if (length(target_cols)) {
-    sum(vapply(df[, target_cols, drop = FALSE], function(x) sum(is.na(x)), integer(1)))
-  } else 0L
+  # Redirect base output to stderr during modeling; restore before CSV write
+  state <- redirect_start()
+  did_redirect_stop <- FALSE
+  on.exit(if (!did_redirect_stop) redirect_stop(state), add = TRUE)
 
-  h2o_start_with_knobs <- function(h2o_mem, h2o_threads, verbose = TRUE) {
+  # H2O start that RESPECTS --h2o-mem / --h2o-threads even if a cluster exists
+  h2o_start_with_knobs <- function(h2o_mem, h2o_threads, quiet = TRUE) {
     if (!requireNamespace("h2o", quietly = TRUE)) {
       stop("Package 'h2o' is required. Install it first.", call. = FALSE)
     }
-    nthreads_final  <- if (!is.null(h2o_threads) && !is.na(h2o_threads)) as.integer(h2o_threads) else -1L
-    mem_final       <- if (!is.null(h2o_mem) && nzchar(h2o_mem)) h2o_mem else NULL
-    ports           <- as.integer(54321:54329)
+    nthreads_final <- if (!is.null(h2o_threads) && !is.na(h2o_threads)) as.integer(h2o_threads) else -1L
+    mem_final      <- if (!is.null(h2o_mem) && nzchar(h2o_mem)) h2o_mem else NULL
+
     existing <- try(h2o::h2o.getConnection(), silent = TRUE)
-    need_restart <- inherits(existing, "H2OConnection") &&
-      (!is.null(mem_final) || !is.null(h2o_threads))
+    need_restart <- inherits(existing, "H2OConnection") && (!is.null(mem_final) || !is.null(h2o_threads))
+
     if (need_restart) {
       suppressWarnings(try(h2o::h2o.shutdown(prompt = FALSE), silent = TRUE))
-      for (i in seq_len(50L)) {
-        Sys.sleep(0.2)
+      for (i in seq_len(120L)) {
+        Sys.sleep(0.25)
         probe <- try(h2o::h2o.getConnection(), silent = TRUE)
         if (inherits(probe, "try-error") || !inherits(probe, "H2OConnection")) break
       }
     }
-    if (!inherits(existing, "H2OConnection")) {
-      last_err <- NULL; started <- FALSE
-      for (p in ports) {
-        res <- try({
-          if (!isTRUE(verbose)) {
-            suppressWarnings(suppressMessages(
-              h2o::h2o.init(
-                nthreads = nthreads_final,
-                max_mem_size = mem_final,
-                port = p,
-                strict_version_check = FALSE
-              )
-            ))
-          } else {
-            h2o::h2o.init(
-              nthreads = nthreads_final,
-              max_mem_size = mem_final,
-              port = p,
-              strict_version_check = FALSE
-            )
-          }
-        }, silent = TRUE)
-        if (!inherits(res, "try-error")) { started <- TRUE; break }
-        last_err <- res
-      }
-      if (!started) {
-        msg <- tryCatch(conditionMessage(attr(last_err, "condition")), error = function(e) as.character(last_err))
-        stop(sprintf("Failed to start H2O (last error: %s)", msg), call. = FALSE)
-      }
+
+    if (is.null(mem_final)) {
+      conn <- h2o::h2o.init(nthreads = nthreads_final)
+    } else {
+      conn <- h2o::h2o.init(max_mem_size = mem_final, nthreads = nthreads_final)
     }
-    invisible(h2o::h2o.getConnection())
+    if (quiet) try(h2o::h2o.no_progress(), silent = TRUE)
+    invisible(conn)
   }
-
-  sym <- cli::symbol
-  i <- 0L
-  hook <- if (length(eligible)) {
-    function() {
-      i <<- i + 1L
-      line <- paste0(
-        cli::col_silver(sym$arrow_right, " "),
-        cli::col_silver("imputing column : "),
-        cli::col_cyan(eligible[[i]])
-      )
-      cat(line, "\n", file = stderr(), sep = "")
-      flush.console()
-    }
-  } else NULL
-
-  state <- redirect_start()
-  on.exit(redirect_stop(state), add = TRUE)
 
   h2o_conn <- h2o_start_with_knobs(
     h2o_mem     = opt$`h2o-mem`,
     h2o_threads = if (!is.na(opt$`h2o-threads`)) opt$`h2o-threads` else NULL,
-    verbose     = !opt$quiet
+    quiet       = !opt$quiet
   )
+
+  # === Progress bar ==========================================================
+  total_cols <- max(length(eligible), 1L)
+  pb <- cli::cli_progress_bar("Imputing (DRF)", total = total_cols)
+  cli::cli_progress_update(id = pb, set = 0)
+
+  # Timer for MODEL RUN ONLY (fit/apply)
+  t_model_start <- Sys.time()
+
+  hook <- if (length(eligible)) {
+    function() cli::cli_progress_update(id = pb)
+  } else {
+    NULL
+  }
 
   out <- imputeflow::impute_h2o_drf_fit_apply(
     df,
@@ -548,54 +704,49 @@ run_drf <- function() {
     col_sample_rate_per_tree = opt$`col-sample-rate-per-tree`,
     balance_classes          = opt$`balance-classes`,
     seed                     = opt$seed,
-    round_digits             = opt$round,
+    round_digits             = opt$round,   # 0 = integer rounding; NA = no rounding
     h2o_threads              = if (!is.na(opt$`h2o-threads`)) opt$`h2o-threads` else NULL,
     h2o_mem                  = opt$`h2o-mem`,
-    verbose                  = !opt$quiet,
+    verbose                  = FALSE,
     progress_hook            = hook,
     h2o_connection           = h2o_conn
   )
 
-  redirect_stop(state)
+  if (!length(eligible)) cli::cli_progress_update(id = pb)
+  cli::cli_progress_done(id = pb)
 
-  after_na <- if (length(target_cols)) {
-    sum(vapply(out[, target_cols, drop = FALSE], function(x) sum(is.na(x)), integer(1)))
-  } else 0L
-
-  fb <- tolower(opt$fallback)
-  if (fb %in% c("mean", "median", "mode") && after_na >= before_na) {
-    cli::cli_alert_warning(
-      "DRF did not reduce missingness; applying fallback {.val {fb}}."
-    )
-    out <- switch(
-      fb,
-      mean   = imputeflow::apply_mean_spec(out,  imputeflow::fit_mean_spec(out,   cols = eligible, train_rows = train_rows), round_digits = opt$round),
-      median = imputeflow::apply_median_spec(out,imputeflow::fit_median_spec(out, cols = eligible, train_rows = train_rows), round_digits = opt$round),
-      mode   = imputeflow::apply_mode_spec(out,  imputeflow::fit_mode_spec(out,   cols = eligible, train_rows = train_rows), round_digits = opt$round),
-      out
-    )
+  # Compute/print model duration
+  dt_secs <- as.numeric(difftime(Sys.time(), t_model_start, units = "secs"))
+  if (dt_secs < 60) {
+    cli::cli_alert_success("Completed DRF in {.num {round(dt_secs, 1)}}s.")
+  } else {
+    mins <- floor(dt_secs / 60)
+    secs <- round(dt_secs %% 60)
+    cli::cli_alert_success("Completed DRF in {.num {mins}}m {.num {secs}}s.")
   }
 
+  # Restore stdout BEFORE writing CSV so redirection works
+  if (!did_redirect_stop) {
+    redirect_stop(state)
+    did_redirect_stop <- TRUE
+  }
   write_stdout_csv(out, verbose = !opt$quiet)
 
   if (isTRUE(opt$`h2o-shutdown`)) {
-    tryCatch(h2o::h2o.shutdown(prompt = FALSE), error = function(e) NULL)
+    tryCatch(h2o::h2o.shutdown(prompt = TRUE), error = function(e) NULL)
   }
-  dt <- round(difftime(Sys.time(), t0, units = "secs"), 2)
-  cli::cli_alert_success("Completed DRF in {.num {dt}} seconds.")
 }
 
-dispatch <- list(
-  mean   = run_mean,
-  median = run_median,
-  mode   = run_mode,
-  knn    = run_knn,
-  drf    = run_drf
-)
+dispatch <- list()
+if (exists("run_mean",   mode = "function")) dispatch$mean   <- run_mean
+if (exists("run_median", mode = "function")) dispatch$median <- run_median
+if (exists("run_mode",   mode = "function")) dispatch$mode   <- run_mode
+if (exists("run_knn",    mode = "function")) dispatch$knn    <- run_knn
+if (exists("run_drf",    mode = "function")) dispatch$drf    <- run_drf
 
 if (method %in% names(dispatch)) {
   dispatch[[method]]()
 } else {
-  cli::cli_alert_danger("Unknown method: {method}")
+  cli::cli_alert_danger("Unknown or unavailable method: {method}")
   quit(status = 2)
 }

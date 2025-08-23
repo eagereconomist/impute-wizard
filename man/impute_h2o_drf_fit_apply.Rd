@@ -21,6 +21,8 @@ impute_h2o_drf_fit_apply(
   h2o_mem = NULL,
   h2o_port = "auto",
   h2o_connection = NULL,
+  nfolds = 0,
+  fold_assignment = "AUTO",
   verbose = TRUE,
   progress_hook = NULL
 )

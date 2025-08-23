@@ -335,20 +335,32 @@ run_median <- function() {
   cli::cli_alert_success("Completed median in {dt} seconds.")
 }
 
-# Run the knn CLI subcommand (with progress bar + themed colors)
+# Run the knn CLI subcommand (styled theme + splits + timer)
 # @keywords internal
 # @noRd
 run_knn <- function() {
   option_list <- c(
     common_fit_apply_opts(),
-    make_option(c("--neighbors"), type = "integer", default = 5)
+    make_option(c("--neighbors"), type = "integer", default = 5,
+                help = "Number of neighbors (k) for recipes::step_impute_knn")
   )
   opt <- parse_args(OptionParser(option_list = option_list), args = args)
 
-  # Make bars show immediately; render to stderr
-  old_opts <- options(cli.progress_show_after = 0, cli.progress_clear = FALSE)
+  # Guards
+  if (is.na(opt$neighbors) || opt$neighbors < 1L) {
+    cli::cli_abort("x {.code --neighbors} must be a positive integer.")
+  }
+
+  # Progress/CLI output to stderr; keep stdout clean for CSV
+  old_opts <- options(
+    cli.progress_show_after = 0,
+    cli.progress_clear      = FALSE,
+    cli.progress_output     = "stderr",
+    cli.num_colors          = 256,
+    crayon.enabled          = TRUE,
+    readr.show_progress     = FALSE
+  )
   on.exit(options(old_opts), add = TRUE)
-  try(options(cli.progress_output = "stderr"), silent = TRUE)
 
   # ── Theme (vivid|minimal) + GREEN progress bar ────────────────────────────
   style <- tolower(Sys.getenv("IMPUTEFLOW_STYLE", "vivid"))
@@ -363,94 +375,213 @@ run_knn <- function() {
       ".impute .col"     = list(bold = TRUE),
       ".impute .num"     = list(color = "blue"),
       ".impute .mem"     = list(color = "magenta"),
+      # split styles to match DRF
+      ".impute .train"   = list(color = "green",  "font-weight" = "bold"),
+      ".impute .valset"  = list(color = "yellow", "font-weight" = "bold"),
+      ".impute .testset" = list(color = "cyan",   "font-weight" = "bold"),
+      # progress bar styling (green)
       ".progress-bar .bar"          = list(color = "green"),
       ".progress-bar .bar-complete" = list(color = "green"),
       ".progress-bar .current"      = list(color = "green")
     ),
     # vivid (default)
     list(
-      ".impute h1"       = list(color = "cyan"),
-      ".impute .label"   = list(color = "grey70"),
-      ".impute .val"     = list(color = "orange",  "font-weight" = "bold"),
-      ".impute .method"  = list(color = "orange",  "font-weight" = "bold"),
-      ".impute .mode"    = list(color = "purple",  "font-weight" = "bold"),
-      ".impute .columns" = list(color = "white"),
-      ".impute .col"     = list(color = "cyan",    "font-weight" = "bold"),
-      ".impute .num"     = list(color = "blue",    "font-weight" = "bold"),
-      ".impute .mem"     = list(color = "magenta", "font-weight" = "bold"),
-      ".impute .ok"      = list(color = "green"),
-      ".impute .warn"    = list(color = "yellow"),
-      ".progress-bar .bar"          = list(color = "green"),
-      ".progress-bar .bar-complete" = list(color = "green"),
-      ".progress-bar .current"      = list(color = "green")
+      ".impute h1"       = list(color = "#6A5ACD", "font-weight" = "bold"),
+      ".impute .label"   = list(color = "#20B2AA", "font-weight" = "bold"),
+      ".impute .val"     = list(color = "#F8F8FF", "font-weight" = "bold"),
+      ".impute .method"  = list(color = "#FF69B4", "font-weight" = "bold"),
+      ".impute .mode"    = list(color = "#7FFFD4",   "font-weight" = "bold"),
+      ".impute .round"   = list(color = "#87CEEB", "font-weight" = "bold"),
+      ".impute .columns" = list(color = "#F8F8FF"),
+      ".impute .col"     = list(color = "#FFD700", "font-weight" = "bold"),
+      ".impute .num"     = list(color = "#20B2AA", "font-weight" = "bold"),
+      ".impute .ok"      = list(color = "#32CD32"),
+      ".impute .warn"    = list(color = "#FFA07A"),
+      # split styles
+      ".impute .train"   = list(color = "#32CD32", "font-weight" = "bold"),
+      ".impute .valset"  = list(color = "#FFD700", "font-weight" = "bold"),
+      ".impute .testset" = list(color = "#87CEEB", "font-weight" = "bold"),
+      # progress bar styling (green)
+      ".progress-bar .bar"          = list(color = "#32CD32"),
+      ".progress-bar .bar-complete" = list(color = "#32CD32"),
+      ".progress-bar .current"      = list(color = "#32CD32")
     )
   )
   div_id <- cli::cli_div(class = "impute", theme = theme)
   on.exit(cli::cli_end(div_id), add = TRUE)
 
+  # Helpers
+  pct_str <- function(x) sprintf("%.2f%%", round(x * 100, 2))
+  fmtn    <- function(x) format(x, big.mark = ",", scientific = FALSE, trim = TRUE)
+
+  # Round message (like DRF)
+  round_msg <- if (isTRUE(is.na(opt$round))) {
+    "None"
+  } else if (opt$round == 0L) {
+    "0 decimals"
+  } else if (opt$round == 1L) {
+    "1 decimal place"
+  } else {
+    sprintf("%d decimal places", opt$round)
+  }
+
   # Header
   .line <- if (isTRUE(l10n_info()[["UTF-8"]])) "─" else "-"
   hdr <- cli::rule(left = cli::col_cyan(cli::style_bold("imputeflow")), line = .line, col = "cyan")
   cat(hdr, "\n", file = stderr(), sep = "")
-  cli::cli_alert_info("Method  : {.method kNN}")
-  cli::cli_alert_info("Mode    : {.mode {opt$mode}} | Neighbors: {.num {opt$neighbors}} | Training fraction (fallback): {.num {opt$`train-frac`}}")
+  cli::cli_alert_info("Method               : {.method k-Nearest Neighbors (kNN)}")
+  cli::cli_alert_info("Round                : {.round {round_msg}}")
+  cli::cli_alert_info("Neighbors (k)        : {.num {opt$neighbors}}")
+  cli::cli_alert_info("Mode                 : {.mode {opt$mode}}")
 
-  df <- read_stdin_csv(verbose = !opt$quiet)
-
+  # Inputs
+  df   <- read_stdin_csv(verbose = !opt$quiet)
+  n    <- nrow(df)
   cols <- parse_cols(opt$cols)
   excl <- parse_cols(opt$`exclude-predictors`)
 
-  # Themed columns banner
   shown <- if (!is.null(cols)) cols else names(df)
   short <- if (length(shown) > 3L) paste0(paste(shown[1:3], collapse = ", "), ", ...") else paste(shown, collapse = ", ")
-  cli::cli_alert_info("Columns : {.columns {short}} ({.num {length(shown)}} total)")
+  cli::cli_alert_info("Columns              : {.columns {short}} ({.num {length(shown)}} total)")
 
+  # Resolve training rows (from file/mask/fraction)
   train_rows <- imputeflow:::resolve_train_rows(
     df, opt$`train-rows`, opt$`train-mask`, opt$`mask-col`,
     train_frac = opt$`train-frac`, seed = opt$seed
   )
+  cli::cli_alert_info(
+    "Training rows        : {.num {fmtn(length(train_rows))}} / {.num {fmtn(n)}} ({.train {pct_str(length(train_rows)/n)}})"
+  )
 
+  # If mask CSV present, show Validation/Test; else, notional Test = n - train
+  if (!is.null(opt$`train-mask`) && nzchar(opt$`train-mask`) && file.exists(opt$`train-mask`)) {
+    mask_try <- try(suppressWarnings(readr::read_csv(opt$`train-mask`, show_col_types = FALSE)), silent = TRUE)
+    if (!inherits(mask_try, "try-error")) {
+      mdf <- as.data.frame(mask_try, stringsAsFactors = FALSE)
+      to_bool <- function(v) {
+        if (is.logical(v)) v
+        else if (is.numeric(v)) v != 0
+        else if (is.character(v)) tolower(trimws(v)) %in% c("true","t","1","yes","y")
+        else rep(FALSE, length(v))
+      }
+      val_n  <- if ("is_val"  %in% names(mdf)) sum(to_bool(mdf[["is_val"]]),  na.rm = TRUE) else NA_integer_
+      test_n <- if ("is_test" %in% names(mdf)) sum(to_bool(mdf[["is_test"]]), na.rm = TRUE) else NA_integer_
+      if (is.na(val_n) && is.na(test_n) && "split_id" %in% names(mdf) && is.numeric(mdf[["split_id"]])) {
+        sid <- mdf[["split_id"]]
+        val_n  <- sum(sid == 2, na.rm = TRUE)
+        test_n <- sum(sid == 3, na.rm = TRUE)
+      }
+      if (!is.na(val_n))  cli::cli_alert_info("Validation rows       : {.num {fmtn(val_n)}} / {.num {fmtn(n)}} ({.valset {pct_str(val_n/n)}})")
+      if (!is.na(test_n)) cli::cli_alert_info("Test rows             : {.num {fmtn(test_n)}} / {.num {fmtn(n)}} ({.testset {pct_str(test_n/n)}})")
+      if (is.na(test_n)) {
+        t2 <- n - length(train_rows)
+        if (t2 >= 0) cli::cli_alert_info("Test rows             : {.num {fmtn(t2)}} / {.num {fmtn(n)}} ({.testset {pct_str(t2/n)}})")
+      }
+    }
+  } else {
+    t2 <- n - length(train_rows)
+    if (t2 >= 0) cli::cli_alert_info("Test rows            : {.num {fmtn(t2)}} / {.num {fmtn(n)}} ({.testset {pct_str(t2/n)}})")
+  }
+
+  # NA-safe ID-like predictor warning (AFTER splits)
+  {
+    candidates <- setdiff(names(df), excl %||% character(0))
+    is_id_like <- function(nm, x) {
+      nm_lc <- tolower(nm)
+      has_id_word <- grepl("\\b(id|uuid|guid)\\b", nm_lc)
+
+      nn  <- sum(!is.na(x))
+      u   <- length(unique(x[!is.na(x)]))
+      rat <- if (nn > 0) u / nn else 0
+      high_card <- (u >= 1000) || (rat >= 0.95)
+
+      is_charfac <- is.character(x) || is.factor(x)
+      is_integery <- is.numeric(x) && {
+        fx <- x[is.finite(x)]
+        length(fx) > 0 && all(abs(fx - round(fx)) < .Machine$double.eps^0.5)
+      }
+
+      (has_id_word && (is_charfac || is_integery)) || high_card
+    }
+
+    id_hits <- character(0)
+    for (nm in candidates) {
+      x <- df[[nm]]
+      # Skip obvious numeric continuous columns (NA-safe)
+      if (is.numeric(x)) {
+        fx <- x[is.finite(x)]
+        intish <- length(fx) > 0 && all(abs(fx - round(fx)) < .Machine$double.eps^0.5)
+        if (!intish) next
+      }
+      if (is_id_like(nm, x)) id_hits <- c(id_hits, nm)
+    }
+    id_hits <- setdiff(unique(id_hits), excl %||% character(0))
+    if (length(id_hits)) {
+      pretty <- paste(sprintf("`%s`", id_hits), collapse = ", ")
+      cli::cli_alert_warning(
+        "Detected ID-like predictors: {pretty}. These can distort kNN distances and slow imputation. Consider excluding via {.code --exclude-predictors}."
+      )
+    }
+  }
+
+  # Determine eligible numeric targets with missingness
   numeric_cols <- names(df)[vapply(df, is.numeric, logical(1))]
   if (!is.null(cols)) numeric_cols <- intersect(numeric_cols, cols)
   eligible <- numeric_cols[vapply(df[numeric_cols], function(x) any(is.na(x)), logical(1))]
-  mode  <- match.arg(tolower(opt$mode), c("fit", "apply", "fit-apply"))
 
-  t0 <- Sys.time()
+  # Mode (fit/apply/fit-apply)
+  mode <- match.arg(tolower(opt$mode), c("fit", "apply", "fit-apply"))
+
+  # Timer for MODEL RUN ONLY (fit/apply)
+  t_model_start <- Sys.time()
 
   if (mode == "fit") {
     if (is.null(opt$`save-spec`)) cli::cli_abort("--save-spec is required in 'fit' mode.")
-    pb <- cli::cli_progress_bar("Fitting (kNN)", total = 2, name = "kNN")
-
+    pb <- cli::cli_progress_bar("Fitting (kNN)", total = 1)
     spec <- imputeflow::fit_knn_spec(
       df, cols = eligible, neighbors = opt$neighbors, train_rows = train_rows,
       exclude_predictors = excl
     )
     cli::cli_progress_update(id = pb)
-
-    saveRDS(spec, opt$`save-spec`)
-    cli::cli_progress_update(id = pb)
     cli::cli_progress_done(id = pb)
+    saveRDS(spec, opt$`save-spec`)
     cli::cli_alert_success("Saved spec to {opt$`save-spec`}.")
-    invisible(NULL)
 
   } else if (mode == "apply") {
     if (is.null(opt$`load-spec`)) cli::cli_abort("--load-spec is required in 'apply' mode.")
-    pb <- cli::cli_progress_bar("Imputing (kNN)", total = 3, name = "kNN")
-
-    spec <- readRDS(opt$`load-spec`);                     cli::cli_progress_update(id = pb)
-    out  <- imputeflow::apply_knn_spec(df, spec, round_digits = opt$round); cli::cli_progress_update(id = pb)
-    write_stdout_csv(out, verbose = !opt$quiet);          cli::cli_progress_update(id = pb)
-    cli::cli_progress_done(id = pb)
-
-  } else { # fit-apply (tick once per column; no per-column messages)
-    n_cols <- length(eligible)
-    pb <- cli::cli_progress_bar("Imputing (kNN)", total = max(n_cols, 1L), name = "kNN")
-
+    spec <- readRDS(opt$`load-spec`)
+    pb   <- cli::cli_progress_bar("Imputing (kNN)", total = max(length(spec$cols), 1L))
+    out_full <- imputeflow::apply_knn_spec(df, spec, round_digits = opt$round)
     out <- df
+    if (length(spec$cols)) {
+      for (nm in spec$cols) {
+        if (!nm %in% names(out)) { cli::cli_progress_update(id = pb); next }
+        out[[nm]] <- out_full[[nm]]
+        cli::cli_progress_update(id = pb)
+      }
+    } else {
+      cli::cli_progress_update(id = pb)
+    }
+    cli::cli_progress_done(id = pb)
+    write_stdout_csv(out, verbose = !opt$quiet)
+
+  } else { # fit-apply
+    n_cols <- length(eligible)
+    pb <- cli::cli_progress_bar("Imputing (kNN)", total = max(n_cols, 1L))
+    out <- df
+
     if (n_cols == 0L) {
       cli::cli_progress_update(id = pb)
       cli::cli_progress_done(id = pb)
       write_stdout_csv(out, verbose = !opt$quiet)
+      # timer + return
+      dt_secs <- as.numeric(difftime(Sys.time(), t_model_start, units = "secs"))
+      if (dt_secs < 60) {
+        cli::cli_alert_success("Completed kNN in {.num {round(dt_secs, 1)}}s.")
+      } else {
+        mins <- floor(dt_secs / 60); secs <- round(dt_secs %% 60)
+        cli::cli_alert_success("Completed kNN in {.num {mins}}m {.num {secs}}s.")
+      }
       return(invisible(NULL))
     }
 
@@ -463,13 +594,18 @@ run_knn <- function() {
       if (nm %in% names(out_one)) out[[nm]] <- out_one[[nm]]
       cli::cli_progress_update(id = pb)
     }
-
     cli::cli_progress_done(id = pb)
     write_stdout_csv(out, verbose = !opt$quiet)
   }
 
-  dt <- round(difftime(Sys.time(), t0, units = "secs"), 2)
-  cli::cli_alert_success("Completed kNN in {dt} seconds.")
+  # Model duration (pretty like DRF)
+  dt_secs <- as.numeric(difftime(Sys.time(), t_model_start, units = "secs"))
+  if (dt_secs < 60) {
+    cli::cli_alert_success("Completed kNN in {.num {round(dt_secs, 1)}}s.")
+  } else {
+    mins <- floor(dt_secs / 60); secs <- round(dt_secs %% 60)
+    cli::cli_alert_success("Completed kNN in {.num {mins}}m {.num {secs}}s.")
+  }
 }
 
 #' Run the drf CLI subcommand (styled theme + single GREEN bar + timer)

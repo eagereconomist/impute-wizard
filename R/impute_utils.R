@@ -380,6 +380,8 @@ impute_h2o_drf_fit_apply <- function(df,
                                      h2o_mem = NULL,
                                      h2o_port = "auto",
                                      h2o_connection = NULL,
+                                     nfolds = 0,
+                                     fold_assignment = "AUTO",
                                      verbose = TRUE,
                                      progress_hook = NULL) {
   if (!inherits(df, "data.frame")) df <- as.data.frame(df, stringsAsFactors = FALSE)
@@ -444,6 +446,10 @@ impute_h2o_drf_fit_apply <- function(df,
       sample_rate = sample_rate, col_sample_rate_per_tree = col_sample_rate_per_tree,
       balance_classes = balance_classes, seed = seed, stopping_rounds = 0
     )
+    if (!is.null(nfolds) && nfolds > 0) {
+      params$nfolds <- as.integer(nfolds)
+      params$fold_assignment <- fold_assignment
+    }
     model <- do.call(h2o::h2o.randomForest, params)
 
     full_pred_hf <- h2o::as.h2o(df2[, x, drop = FALSE])

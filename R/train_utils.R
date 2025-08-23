@@ -64,14 +64,60 @@ resolve_train_rows <- function(df, train_rows_path, train_mask_path, mask_col,
     if (!length(idx)) stop("No valid indices found in --train-rows.", call. = FALSE)
     return(idx)
   }
+
   if (!is.null(train_mask_path)) {
     mk <- .read_mask_csv(train_mask_path, mask_col = mask_col)
     if (length(mk) != n) stop("Train mask length does not match input rows.", call. = FALSE)
-    idx <- which(isTRUE(mk))
-    if (!length(idx)) stop("No TRUE rows in train mask.", call. = FALSE)
+
+    mk <- as.logical(mk)
+    idx <- which(!is.na(mk) & mk)   # <- fix: select TRUEs element-wise
+
+    if (!length(idx)) {
+      # helpful diagnostics
+      vals <- tryCatch({
+        tbl <- sort(table(mk, useNA = "ifany"), decreasing = TRUE)
+        paste(capture.output(print(tbl)), collapse = " | ")
+      }, error = function(e) "unavailable")
+      stop(sprintf("No TRUE rows in train mask. Value counts: %s", vals), call. = FALSE)
+    }
     return(idx)
   }
+
   if (!is.numeric(train_frac) || train_frac <= 0 || train_frac > 1)
     stop("`train_frac` must be in (0,1].", call. = FALSE)
   if (train_frac < 1) { set.seed(seed); sample(seq_len(n), floor(train_frac * n)) } else seq_len(n)
+}
+
+#' Deterministic 2/3-way split for train/val/test
+#' @keywords internal
+#' @noRd
+make_split_mask <- function(df, probs = c(0.7, 0.15, 0.15),
+                            id_col = NULL, stratify_by = NULL, seed = 2798) {
+  stopifnot(length(probs) %in% c(2L,3L))
+  probs <- probs / sum(probs)
+  if (length(probs) == 2L) probs <- c(probs, 1 - sum(probs))
+
+  if (!is.null(id_col) && id_col %in% names(df)) {
+    if (!requireNamespace("digest", quietly = TRUE)) {
+      stop("Package 'digest' is required for deterministic split.", call. = FALSE)
+    }
+    u <- vapply(df[[id_col]], function(x) {
+      h <- digest::digest(x, algo = "murmur32", serialize = FALSE)
+      as.numeric(as.hexmode(substr(h, 1, 8))) / 2^32
+    }, numeric(1))
+  } else { set.seed(seed); u <- runif(nrow(df)) }
+
+  assign_bucket <- function(u_vec) {
+    cuts <- c(0, cumsum(probs))
+    as.integer(cut(u_vec, breaks = cuts, include.lowest = TRUE, labels = FALSE))
+  }
+
+  if (!is.null(stratify_by) && stratify_by %in% names(df)) {
+    buckets <- integer(nrow(df))
+    for (lvl in unique(df[[stratify_by]])) {
+      idx <- which(df[[stratify_by]] == lvl)
+      buckets[idx] <- assign_bucket(u[idx])
+    }
+    buckets
+  } else assign_bucket(u)
 }

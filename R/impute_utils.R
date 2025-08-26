@@ -82,7 +82,14 @@ round_imputed_numerics <- function(original, imputed, digits = NA) {
 #' @keywords internal
 #' @noRd
 
-`%||%` <- function(x, y) if (is.null(x) || (is.character(x) && !nzchar(x))) y else x
+`%||%` <- function(x, y) {
+  if (is.null(x)) return(y)
+  if (is.character(x)) {
+    if (length(x) == 0) return(y)
+    if (length(x) == 1 && !nzchar(x)) return(y)
+  }
+  x
+}
 
 #' Fit a mean-imputation specification
 #'

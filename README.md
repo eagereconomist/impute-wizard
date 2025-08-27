@@ -170,6 +170,23 @@ cat data/example.csv | exec/imputeflow \
 
 ---
 
+The point of `imputeflow` isn't to promote naïve imputation — it’s to have a **CLI-first** way to push any **dataset through a proper imputation pipeline**. You can:
+
+- **stream data in via stdin and out via stdout** — no need to juggle intermediate files
+- **mask rows into train/validation/test splits** (`--train-mask`), which is a best practice for fair evaluation
+- choose **non-naïve methods** like:
+
+1. kNN (via [recipes](https://recipes.tidymodels.org/) from [tidymodels](https://www.tidymodels.org/)) — imputes based on nearest neighbors in feature space, borrowing strength from correlated variables.
+
+2. DRF (via [H2O](https://docs.h2o.ai/h2o/latest-stable/h2o-docs/welcome.html)) — uses H2O’s Distributed Random Forests to learn predictive models for missingness, allowing imputations that respect nonlinearities and interactions in the data.
+
+Naïve imputation methods like mean, median, or mode could be used because they are simple and fast — but they are also extremely limited. Each missing value is replaced with the same constant number per column, which:
+
+- distorts the natural variance of your data
+- ignores relationships between variables
+- can bias downstream models and analysis
+
+
 
 
 

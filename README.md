@@ -29,12 +29,30 @@ cd imputeflow
 #### 2. Set up the R environment
 This project uses [renv](https://rstudio.github.io/renv/) for dependency management and reproducibility.
 
-- #### Install R packages required for setup
+#### 2A. Install R packages required for setup
 Open an R terminal (or RStudio) and install `renv` if it's not already available:
+
+`renv` should already be installed, but if you're not sure, run:
+
+```r
+system.file(package = "renv")
+```
+
+If R spits out a path after running the above, `renv` is already installed, but if that doesn't happen, run the following:
 
 ```r
 install.packages("renv")
 ```
+
+#### 2B. Troubleshooting
+
+If you see the following message in the R terminal at startup:
+
+```r
+— The project is out-of-sync —— use `renv::status()` for details.
+```
+
+After running the status command above, `renv` will most likely tell you that the project is out of sync.
 
 Then use `renv::restore()` to install all packages pinned in the `renv.lock` file:
 
@@ -54,6 +72,31 @@ If you're starting the project from scratch or want to regenerate the lockfile:
 renv::init()
 ```
 
+And if as a result of running `renv::restore()` you see:
+
+```r
+— The library is already synchronized with the lockfile.
+```
+
+Move on to **Step 3** below.
+
+#### 3. Build the package (registers helpers/exports)
+Fresh clones can hit **"object not found"** for helpers until the pkg is documented & installed.
+
+```r
+devtools::document()
+devtools::install()
+```
+
+#### 4. Snapshot and check status of environment
+Sometimes `{h2o}` can be fussy on first load; a quick snapshot/restore should stabilize things.
+
+```r
+renv::snapshot()
+renv::status()
+```
+
+
 ## CLI Flags (common)
 
 | Flag                  | Description                                                                 |
@@ -68,10 +111,47 @@ renv::init()
 | `--neighbors`         | Number of neighbors (kNN only)                                              |
 | `--h2o-mem`           | H2O memory allocation (e.g. `16G`, `32G`)                                   |
 
-## Project Organization
+## 📦 Project Structure
 
-```bash
-
+```
+├── DESCRIPTION                 # Package metadata
+├── LICENSE                     # License info
+├── README.md                   # You are here
+├── NAMESPACE                   # Exported functions
+├── renv/                       # Environment snapshot + activation
+│   ├── activate.R
+│   └── settings.json
+├── renv.lock                   # Pinned dependencies and versions
+├── exec/                       # CLI entrypoint
+│   └── imputeflow             # Main CLI script (e.g., cat file.csv | imputeflow mean)
+├── R/                          # Core package logic
+│   ├── config.R               # Path constants via rprojroot + fs
+│   ├── h2o_utils.R            # H2O cluster mgmt + connection helpers
+│   ├── impute_utils.R         # Imputation logic (mean, median, mode, kNN, rounding)
+│   └── train_utils.R          # Helpers for fitting & splitting data
+├── man/                        # Auto-generated Rd docs
+│   ├── apply_knn_spec.Rd
+│   ├── apply_mean_spec.Rd
+│   ├── apply_median_spec.Rd
+│   ├── apply_mode_spec.Rd
+│   ├── ensure_h2o.Rd
+│   ├── fit_knn_spec.Rd
+│   ├── fit_mean_spec.Rd
+│   ├── fit_median_spec.Rd
+│   ├── fit_mode_spec.Rd
+│   └── impute_h2o_drf_fit_apply.Rd
+└── tests/                      # Test suite (testthat)
+    ├── testthat.R
+    └── testthat/
+        ├── fixtures/
+        │   └── bank_test_data.rds    # Reproducible imputation test input
+        ├── helper-h2o-setup.R        # DRF test cluster config
+        ├── teardown-h2o.R            # DRF shutdown logic
+        ├── test-drf.R                # Tests for H2O DRF imputation
+        ├── test-knn.R                # Tests for kNN imputation
+        ├── test-mean.R               # Tests for mean imputation
+        ├── test-median.R             # Tests for median imputation
+        └── test-mode.R               # Tests for mode imputation
 ```
 
 ---

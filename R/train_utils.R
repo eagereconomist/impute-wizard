@@ -70,10 +70,9 @@ resolve_train_rows <- function(df, train_rows_path, train_mask_path, mask_col,
     if (length(mk) != n) stop("Train mask length does not match input rows.", call. = FALSE)
 
     mk <- as.logical(mk)
-    idx <- which(!is.na(mk) & mk)   # <- fix: select TRUEs element-wise
+    idx <- which(!is.na(mk) & mk)
 
     if (!length(idx)) {
-      # helpful diagnostics
       vals <- tryCatch({
         tbl <- sort(table(mk, useNA = "ifany"), decreasing = TRUE)
         paste(capture.output(print(tbl)), collapse = " | ")

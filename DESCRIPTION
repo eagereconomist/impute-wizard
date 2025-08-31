@@ -1,11 +1,11 @@
 Package: imputeflow
 Type: Package
 Title: Data Imputation CLI and Utilities
-Version: 0.1.0
+Version: 0.0.1
 Authors@R: c(person(given = "Eric", family = "Miller", role = c("aut", "cre"), email = "myeagereconomist@gmail.com"))
 Description: Provides command-line and programmatic helpers for imputing missing data
     using several strategies (mean, median, mode, k-nearest-neighbors (kNN), and
-    distributed random forests (DRF) via H2O).  Includes utilities for reading and
+    distributed random forests (DRF) via H2O). Includes utilities for reading and
     writing CSVs, rounding numeric columns, progress reporting, and preventing
     data leakage via train/test splits and cross-validation.  A simple CLI
     wrapper (`exec/imputeflow`) exposes these features to the shell.

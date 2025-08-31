@@ -13,7 +13,7 @@ test_that("mean imputation works on bank_fixture", {
   for (nm in targets) {
     pre  <- imputeflow:::missing_mask(df[[nm]])
     post <- imputeflow:::missing_mask(out[[nm]])
-    expect_true(any(pre))                     # sanity: had missing
+    expect_true(any(pre))
     expect_false(any(post[pre], na.rm = TRUE))
   }
 })

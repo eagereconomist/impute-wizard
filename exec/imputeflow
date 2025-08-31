@@ -144,21 +144,6 @@ redirect_stop <- function(state) {
   }
 }
 
-# small helper to print the same arrowed per-column line as DRF
-.per_col_line <- function(colname) {
-  sym <- cli::symbol
-  cat(
-    paste0(
-      cli::col_silver(sym$arrow_right, " "),
-      cli::col_silver("imputing column : "),
-      cli::col_cyan(colname),
-      "\n"
-    ),
-    file = stderr()
-  )
-  flush.console()
-}
-
 #' Format a proportion as a percentage string
 #'
 #' Converts a proportion (e.g., `0.3`) into a percentage string with two
@@ -244,7 +229,7 @@ missing_cols <- function(df) {
   names(df)[vapply(df, imputeflow:::needs_imputation, logical(1))]
 }
 
-#' Print pre → post missingness summary (CLI)
+#' Print pre -> post missingness summary (CLI)
 #'
 #' Emits a compact CLI summary of missingness before and after imputation for a
 #' set of columns, including an overall line and the top `top_n` columns sorted
@@ -258,7 +243,7 @@ missing_cols <- function(df) {
 #' @param cols Optional character vector of column names to report. Defaults to
 #'   [missing_cols(pre_df)].
 #' @param title A title shown above the block. Default:
-#'   `"Missingness (pre → post)"`.
+#'   `"Missingness (pre -> post)"`.
 #' @param top_n Integer; number of columns to display (after sorting by pre
 #'   missingness). Defaults to `as.integer(Sys.getenv("IMPUTEFLOW_MISS_TOP", "12"))`.
 #'
@@ -880,10 +865,10 @@ run_knn <- function() {
       ".impute .valset"  = list(color = "#FFD700", "font-weight" = "bold"),
       ".impute .testset" = list(color = "#87CEEB", "font-weight" = "bold"),
       # missingness pastel classes
-      ".impute .misshdr"  = list(color = "#87CEEB", "font-weight" = "bold"), # sky blue
-      ".impute .misspre"  = list(color = "#FFA07A"),  # light salmon (pre)
-      ".impute .misspost" = list(color = "#7FFFD4"),  # aquamarine (post)
-      ".impute .delta"    = list(color = "#20B2AA"),  # teal (delta)
+      ".impute .misshdr"  = list(color = "#87CEEB", "font-weight" = "bold"),
+      ".impute .misspre"  = list(color = "#FFA07A"),  
+      ".impute .misspost" = list(color = "#7FFFD4"),  
+      ".impute .delta"    = list(color = "#20B2AA"),  
       # progress bar styling (green)
       ".progress-bar .bar"          = list(color = "#32CD32"),
       ".progress-bar .bar-complete" = list(color = "#32CD32"),
@@ -1056,7 +1041,7 @@ run_knn <- function() {
     }
     cli::cli_progress_done(id = pb)
 
-    # Pre → Post block (use spec$cols when available)
+    # Pre -> Post block (use spec$cols when available)
     cols_used <- if (is.list(spec) && identical(spec$type, "knn")) spec$cols else pre_missing_cols
     if (length(cols_used)) {
       print_missingness_prepost(pre_df, out, cols_used, title = "Missingness (pre \u2192 post)")
@@ -1098,13 +1083,13 @@ run_knn <- function() {
     }
     cli::cli_progress_done(id = pb)
 
-    # Pre → Post block
+    # Pre -> Post block
     print_missingness_prepost(pre_df, out, pre_missing_cols, title = "Missingness (pre \u2192 post)")
 
     write_stdout_csv(out, verbose = !opt$quiet)
   }
 
-  # Model duration (pretty like DRF)
+  # Model duration
   dt_secs <- as.numeric(difftime(Sys.time(), t_model_start, units = "secs"))
   if (dt_secs < 60) {
     cli::cli_alert_success("Completed kNN in {.num {round(dt_secs, 1)}}s.")
@@ -1114,7 +1099,7 @@ run_knn <- function() {
   }
 }
 
-#' Run the drf CLI subcommand (styled theme + single GREEN bar + timer + missingness)
+#' Run the drf CLI subcommand
 #' @keywords internal
 #' @noRd
 run_drf <- function() {
@@ -1241,10 +1226,10 @@ run_drf <- function() {
       ".impute .valset"  = list(color = "#FFD700", "font-weight" = "bold"),
       ".impute .testset" = list(color = "#87CEEB", "font-weight" = "bold"),
       # missingness pastel classes
-      ".impute .misshdr"  = list(color = "#87CEEB", "font-weight" = "bold"), # sky blue
-      ".impute .misspre"  = list(color = "#FFA07A"),  # light salmon (pre)
-      ".impute .misspost" = list(color = "#7FFFD4"),  # aquamarine (post)
-      ".impute .delta"    = list(color = "#20B2AA"),  # teal (delta)
+      ".impute .misshdr"  = list(color = "#87CEEB", "font-weight" = "bold"),
+      ".impute .misspre"  = list(color = "#FFA07A"),
+      ".impute .misspost" = list(color = "#7FFFD4"),
+      ".impute .delta"    = list(color = "#20B2AA"),
       # progress bar styling (green)
       ".progress-bar .bar"          = list(color = "#32CD32"),
       ".progress-bar .bar-complete" = list(color = "#32CD32"),
@@ -1420,7 +1405,7 @@ run_drf <- function() {
     quiet       = !opt$quiet
   )
 
-  # === Progress bar ==========================================================
+  # Progress bar
   total_cols <- max(length(eligible), 1L)
   pb <- cli::cli_progress_bar("Imputing (DRF)", total = total_cols)
   cli::cli_progress_update(id = pb, set = 0)
@@ -1468,14 +1453,14 @@ run_drf <- function() {
     cli::cli_alert_success("Completed DRF in {.num {mins}}m {.num {secs}}s.")
   }
 
-  # NEW: Missingness pre → post (print to stderr before restoring stdout)
+  # Missingness pre -> post (print to stderr before restoring stdout)
   if (length(pre_missing_cols)) {
     print_missingness_prepost(pre_df, out, pre_missing_cols, title = "Missingness (pre \u2192 post)")
   } else {
     cli::cli_alert_info("Missingness: no target columns required imputation.")
   }
 
-  # Restore stdout BEFORE writing CSV so redirection works
+  # Restore stdout before writing CSV so redirection works
   if (!did_redirect_stop) {
     redirect_stop(state)
     did_redirect_stop <- TRUE
